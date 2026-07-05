@@ -333,6 +333,79 @@ class MeshMetadata(StrictModel):
     quality_report: dict[str, Any] = Field(default_factory=dict)
 
 
+class FunctionSpacePlan(StrictModel):
+    field: str
+    kind: FieldKind
+    components: int
+    element_family: str
+    element_order: int
+    unit: str
+    unit_dimension: str
+    block_index: int
+
+
+class MeasureBindingPlan(StrictModel):
+    namespace: TagNamespace
+    name: str
+    dim: int
+    physical_id: int
+    physical_name: str
+
+
+class MaterialBindingPlan(StrictModel):
+    material: str
+    model: str
+    tag: str
+    dim: int
+    physical_id: int
+    entity_tags: tuple[int, ...]
+
+
+class BoundaryConditionBindingPlan(StrictModel):
+    name: str
+    type: str
+    field: str
+    tag: str
+    dim: int
+    physical_id: int
+    value: Any | None = None
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+class LoadBindingPlan(StrictModel):
+    name: str
+    type: str
+    field: str
+    tag: str
+    dim: int
+    physical_id: int
+    value: Any | None = None
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+class CouplingDependencyPlan(StrictModel):
+    source_field: str
+    target_field: str
+    mechanism: str
+
+
+class DiscretePlan(StrictModel):
+    content_hash: str = ""
+    spec_hash: str
+    mesh_hash: str
+    mode: Mode
+    mesh_dimension: int
+    cell_type: CellType
+    spaces: tuple[FunctionSpacePlan, ...]
+    measures: tuple[MeasureBindingPlan, ...]
+    materials: tuple[MaterialBindingPlan, ...]
+    boundary_conditions: tuple[BoundaryConditionBindingPlan, ...]
+    loads: tuple[LoadBindingPlan, ...]
+    coupling: tuple[CouplingDependencyPlan, ...] = ()
+    solver_fieldsplits: tuple[str, ...] = ()
+    output_fields: tuple[str, ...] = ()
+
+
 class RunManifest(StrictModel):
     schema_version: str
     content_hash: str

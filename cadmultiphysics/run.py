@@ -11,10 +11,11 @@ from pydantic import ValidationError
 
 from cadmultiphysics.core import build_domain_ir, build_problem_spec, build_run_manifest, build_run_plan
 from cadmultiphysics.diagnostics import Diagnostic, schema_diagnostics
-from cadmultiphysics.errors import MeshError, OutputError
+from cadmultiphysics.discrete import build_discrete_plan
+from cadmultiphysics.errors import DiscretizationError, MeshError, OutputError
 from cadmultiphysics.io import load_config, write_diagnostics_csv, write_json
 from cadmultiphysics.mesh import generate_mesh
-from cadmultiphysics.schema import DomainIR, MeshMetadata, ProblemSpec, RestartState, RunArtifact, RunManifest, RunPlan, RunReport, SolutionState, StepRecord
+from cadmultiphysics.schema import DiscretePlan, DomainIR, MeshMetadata, ProblemSpec, RestartState, RunArtifact, RunManifest, RunPlan, RunReport, SolutionState, StepRecord
 from cadmultiphysics.solver import execute_solve
 from cadmultiphysics.units import QuantitySpec
 
@@ -38,14 +39,18 @@ def mesh_spec(spec: ProblemSpec, out: str, overwrite: bool = False) -> CommandRe
         build = generate_mesh(spec, run_dir / "mesh")
         _write_mesh_artifacts(build.metadata, build.artifacts)
         artifacts.update({name: _artifact(path) for name, path in build.artifacts.items()})
+        discrete_path = _write_discrete_artifact(build_discrete_plan(spec, build.metadata), run_dir)
+        artifacts["discrete_plan"] = _artifact(discrete_path)
         manifest = _write_manifest(spec, run_dir, artifacts)
         artifacts["manifest"] = _artifact(run_dir / "manifest.json")
         restart_path = run_dir / "restarts" / "restart_0000.json"
         restart_state = _mesh_restart_state(spec, manifest, artifacts["manifest"].sha256, artifacts)
         write_json(restart_path, restart_state.model_dump(mode="json"))
         artifacts["restart_0000"] = _artifact(restart_path)
-    except MeshError as exc:
+    except (DiscretizationError, MeshError) as exc:
         diagnostics = tuple(exc.diagnostics)
+        manifest = _write_manifest(spec, run_dir, artifacts)
+        artifacts["manifest"] = _artifact(run_dir / "manifest.json")
     return _finish_problem_command("mesh", spec, domain, plan, manifest, artifacts, diagnostics, run_dir, 1 if diagnostics else 0)
 
 
@@ -65,6 +70,8 @@ def solve_spec(spec: ProblemSpec, out: str, overwrite: bool = False) -> CommandR
         build = generate_mesh(spec, run_dir / "mesh")
         _write_mesh_artifacts(build.metadata, build.artifacts)
         artifacts.update({name: _artifact(path) for name, path in build.artifacts.items()})
+        discrete_path = _write_discrete_artifact(build_discrete_plan(spec, build.metadata), run_dir)
+        artifacts["discrete_plan"] = _artifact(discrete_path)
         result = execute_solve(spec, plan, run_dir)
         artifacts.update({name: _artifact(path) for name, path in result.artifacts.items()})
         diagnostics = result.diagnostics
@@ -77,7 +84,7 @@ def solve_spec(spec: ProblemSpec, out: str, overwrite: bool = False) -> CommandR
         restart_state = _solve_restart_state(spec, manifest, artifacts["manifest"].sha256, result.state, artifacts)
         write_json(restart_path, restart_state.model_dump(mode="json"))
         artifacts["restart_0000"] = _artifact(restart_path)
-    except MeshError as exc:
+    except (DiscretizationError, MeshError) as exc:
         diagnostics = tuple(exc.diagnostics)
         exit_code = 1
         manifest = _write_manifest(spec, run_dir, artifacts)
@@ -156,6 +163,12 @@ def _write_mesh_artifacts(metadata: MeshMetadata, artifacts: dict[str, Path]) ->
     write_json(artifacts["geometry_ir"], [entity.model_dump(mode="json") for entity in metadata.entities])
 
 
+def _write_discrete_artifact(plan: DiscretePlan, run_dir: Path) -> Path:
+    path = run_dir / "discrete_plan.json"
+    write_json(path, plan.model_dump(mode="json"))
+    return path
+
+
 def _mesh_restart_state(
     spec: ProblemSpec,
     manifest: RunManifest,
@@ -171,7 +184,7 @@ def _mesh_restart_state(
         fields=tuple(field.name for field in spec.fields),
         step_index=0,
         time=spec.time.start if spec.time else None,
-        artifacts=_restart_artifacts(artifacts, ("model_msh", "mesh_metadata", "tag_map", "geometry_ir")),
+        artifacts=_restart_artifacts(artifacts, ("model_msh", "mesh_metadata", "tag_map", "geometry_ir", "discrete_plan")),
     )
 
 
@@ -192,7 +205,7 @@ def _solve_restart_state(
         step_index=state.committed_step,
         time=_state_time(state),
         state_hash=state.state_hash,
-        artifacts=_restart_artifacts(artifacts, ("model_msh", "mesh_metadata", "tag_map", "geometry_ir", "solution_state")),
+        artifacts=_restart_artifacts(artifacts, ("model_msh", "mesh_metadata", "tag_map", "geometry_ir", "discrete_plan", "solution_state")),
     )
 
 
