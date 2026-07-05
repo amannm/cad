@@ -1,43 +1,69 @@
 flowchart LR
-    CFG["Config\nuser input, units, solver preferences"]
-    UNITS["Units\nnormalization + dimensional metadata"]
-    SPEC["ProblemSpec\ncanonical, normalized, hashable problem"]
-    RUNPLAN["RunPlan\nexecution policy: mesh, solver, time,\noutputs, checkpoints, restart"]
+    CFG["Config\nuser input, units, preferences"]
+    VALIDCFG["Schema Validation\nPydantic models + JSON Schema\nstrict error locations"]
+    UNITS["Unit System\nPint registry, canonical base units,\ndimensional metadata"]
+    SPEC["ProblemSpec\ncanonical, normalized, hashable"]
+    MODEL["DomainModel IR\ngeometry refs, fields, materials,\nloads, BCs, interfaces"]
+    RUNPLAN["RunPlan\nmesh, solver, time, outputs,\ncheckpoint/restart policy"]
 
-    GEOM["GeometryModel\nCAD model + semantic names"]
-    TAGS["TagRegistry\nnames, physical ids, entity dims,\nmaterials, boundaries, interfaces, coverage policy"]
-    MESH["SemanticMesh\nmesh + meshtags + provenance + quality"]
+    CADAPI["CAD Kernel Adapter\ncompact internal API over CadQuery/OCC/Gmsh OCC"]
+    GEOM["GeometryModel\nB-rep + stable semantic names"]
+    TAGS["TagRegistry\nentity dim/id/name/material/interface\ncoverage + exclusivity policy"]
+    MESHPLAN["MeshPlan\nsize fields, order, boundary layers,\ncurvature, adapt/refine policy"]
+    MESH["SemanticMesh\nmesh + meshtags + CAD provenance"]
+    MESHQA["MeshQualityGate\nvalidity, orientation, tag coverage,\nquality metrics, repair/adapt decisions"]
 
+    FIELDS["FieldRegistry\nunknowns, spaces, components, units"]
+    MAT["MaterialModel\nparameters, state variables, update law"]
+    PHYS["PhysicsPackage\nUFL forms, IC/BC/load schema,\ninvariants, derived outputs"]
+    COUPLE["CouplingGraph\nfield dependencies, block layout,\noperator ownership"]
     DISCRETE["DiscreteModel\nspaces, measures, dofs, BC/load bindings"]
-    PHYS["PhysicsPackage\nfields, materials, forms, ICs, BC schema,\noutputs, invariants"]
-    ASSEMBLY["AssemblyPlan / AlgebraicSystem\nF,J,P,A,b,M, nullspaces,\nblock layout, BC application, caches"]
-    STATE["StateStore\nstate vectors, history, transactions,\ncommit/rollback"]
+    FORMCACHE["FormCompilerCache\nUFL/FFCx signatures, constants, kernels"]
 
-    STEPPER["Stepper\nsteady, transient, adaptive dt,\nload ramp, continuation"]
-    PROFILE["SolverProfile\nPETSc prefix tree, defaults,\nblock/fallback policy"]
-    SOLVER["SolverDriver\nKSP/SNES solve for one algebraic system"]
-    DIAG["Diagnostics\niterations, residuals, invariant events,\nfallbacks, timings"]
+    ASSEMBLY["AssemblyPlan / AlgebraicSystem\nF,J,P,A,b,M, nullspaces, BC application,\nMatNest/AIJ layout, reuse policy"]
+    STATE["StateStore\ncurrent/trial/history/material state\ntransactions + commit/rollback"]
+    STEPPER["Stepper\nsteady/transient/adaptive dt/load ramp/continuation"]
+    PROFILE["SolverProfile\nPETSc prefix tree, KSP/SNES/PC,\nfieldsplit and fallback policy"]
+    SOLVER["SolverDriver\none algebraic solve"]
+    DIAG["Diagnostics\nresiduals, iterations, conservation checks,\nfallbacks, timings, option snapshot"]
 
+    OUTPUTPLAN["OutputPlan\nfields, probes, cadence, format"]
     POST["Postprocess\nprobes, integrals, derived fields"]
     VIZ["VisualizationBundle\nmesh, fields, tags, time metadata"]
+    INSITU["InSituHook optional\nParaView Catalyst adapter"]
 
-    RESTART["RestartContract\nstrict compatibility manifest"]
+    CKPTCTRL["CheckpointController\nADIOS2/HDF5 backend, cadence,\natomic write, retention"]
     CKPT["CheckpointPayload\nstate/history/time/material variables"]
-    REPORT["RunReport\nstatus, convergence, warnings,\nPETSc snapshot, artifact hashes"]
-    STORE["ArtifactStore\nspec, geometry, mesh, forms,\ncheckpoints, outputs, provenance"]
-    VALID["Validation\nschema, geometry, tags, mesh,\nforms, restart, outputs"]
+    RESTART["RestartContract\nstrict compatibility manifest:\nspec/mesh/forms/versions/partitioning"]
+    STORE["ArtifactStore\ncontent-addressed artifacts + provenance DAG"]
+    REPORT["RunReport\nstatus, convergence, warnings, hashes"]
+    VALID["Validation Gates\nschema, geometry, tags, mesh, physics,\nforms, solver, restart, outputs"]
 
-    CFG --> UNITS --> SPEC --> RUNPLAN
-    SPEC --> GEOM
+    CFG --> VALIDCFG --> UNITS --> SPEC
+    SPEC --> MODEL
+    SPEC --> RUNPLAN
+    MODEL --> CADAPI --> GEOM
     GEOM --> TAGS
-    GEOM --> MESH
+    RUNPLAN --> MESHPLAN
+    GEOM --> MESHPLAN --> MESH
     TAGS --> MESH
-    MESH --> DISCRETE
+    MESH --> MESHQA
+    MESHQA -->|accept| DISCRETE
+    MESHQA -->|repair/adapt| MESHPLAN
+
+    MODEL --> FIELDS
+    MODEL --> MAT
+    FIELDS --> PHYS
+    MAT --> PHYS
+    PHYS --> COUPLE
+    FIELDS --> DISCRETE
     TAGS --> DISCRETE
     PHYS --> DISCRETE
-    DISCRETE --> ASSEMBLY
+    DISCRETE --> FORMCACHE --> ASSEMBLY
+    COUPLE --> ASSEMBLY
     PHYS --> ASSEMBLY
     STATE --> ASSEMBLY
+
     RUNPLAN --> STEPPER
     STEPPER --> ASSEMBLY
     PROFILE --> SOLVER
@@ -45,33 +71,36 @@ flowchart LR
     SOLVER --> STATE
     SOLVER --> DIAG
     STEPPER --> DIAG
+    ASSEMBLY --> DIAG
+
+    RUNPLAN --> OUTPUTPLAN
     STATE --> POST
     PHYS --> POST
-    POST --> VIZ
+    OUTPUTPLAN --> POST --> VIZ
+    POST --> INSITU
 
-    STATE --> CKPT
-    CKPT --> RESTART
+    STATE --> CKPTCTRL --> CKPT --> RESTART
     SPEC --> RESTART
     RUNPLAN --> RESTART
     MESH --> RESTART
     PHYS --> RESTART
+    FORMCACHE --> RESTART
 
     SPEC --> STORE
     RUNPLAN --> STORE
     GEOM --> STORE
     TAGS --> STORE
     MESH --> STORE
-    ASSEMBLY --> STORE
+    FORMCACHE --> STORE
     CKPT --> STORE
     VIZ --> STORE
     DIAG --> REPORT
     STORE --> REPORT
     RESTART --> REPORT
 
-    VALID -.-> SPEC
-    VALID -.-> RUNPLAN
+    VALID -.-> VALIDCFG
     VALID -.-> TAGS
-    VALID -.-> MESH
+    VALID -.-> MESHQA
     VALID -.-> DISCRETE
     VALID -.-> PHYS
     VALID -.-> ASSEMBLY

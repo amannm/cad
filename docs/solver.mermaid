@@ -1,41 +1,49 @@
 flowchart TD
     RUNPLAN["RunPlan\nmode, time policy, output cadence,\ncheckpoint cadence, restart"]
-    STEPPER["Stepper\nsteady / fixed transient / adaptive transient /\nload ramp / continuation"]
-    PHYS["PhysicsPackage\nforms, material updates, invariants"]
+    STEPPER["Stepper\nsteady / transient / adaptive dt /\nload ramp / continuation"]
+    PHYS["PhysicsPackage\nforms, materials, invariants"]
     DISCRETE["DiscreteModel\nspaces, dofs, measures, BC/load bindings"]
-    STATE["StateStore\ncurrent, trial, history, commit/rollback"]
-    ASSEMBLY["AssemblyPlan / AlgebraicSystem\nassemble F,J,P,A,b,M\napply BCs, nullspaces, block layout"]
-    PROFILE["SolverProfile\nPETSc prefix tree, KSP/SNES/PC options,\nfieldsplit policy, fallbacks"]
+    STATE["StateStore\ncommitted, trial, history, material vars"]
+    TXN["StateTransaction\nbegin trial step, commit, rollback"]
+    ASSEMBLY["AssemblyPlan / AlgebraicSystem\nassemble F,J,P,A,b,M\nBCs, nullspaces, block layout"]
+    PROFILE["SolverProfile\nPETSc prefix tree, SNES/KSP/PC options,\nfieldsplit and fallback policy"]
     DRIVER["SolverDriver\nsolve one algebraic system"]
-    DIAG["Diagnostics\nresiduals, iterations, monitors,\nfailed steps, timings"]
+    CHECKS["AcceptanceChecks\nconvergence, invariant residuals,\nNaN/Inf, step-size constraints"]
+    DIAG["Diagnostics\nresiduals, iterations, monitors,\nfailed steps, timings, PETSc options"]
     ACCEPT{"Accept step?"}
     COMMIT["commit state\nwrite outputs/checkpoint if due"]
-    ROLLBACK["rollback state\nadapt dt / fallback / abort"]
+    ROLLBACK["rollback state\nadapt dt / change profile / abort"]
+    FALLBACK["FallbackPolicy\nlinearization retry, damping, dt cut,\nalternate PC/KSP/SNES"]
+    CKPTCTRL["CheckpointController\natomic checkpoint + retention"]
     CKPT["CheckpointPayload + RestartContract"]
-    REPORT["RunReport"]
+    OUTPLAN["OutputPlan\nfields/probes/cadence/format"]
     OUT["Solution outputs"]
-    POST["Postprocess"]
+    POST["Postprocess\nprobes, integrals, derived fields"]
     VIZ["VisualizationBundle"]
+    REPORT["RunReport"]
 
     RUNPLAN --> STEPPER
-    STEPPER --> STATE
-    STEPPER --> ASSEMBLY
+    RUNPLAN --> OUTPLAN
+    STEPPER --> TXN
+    STATE --> TXN
+    TXN --> ASSEMBLY
     PHYS --> ASSEMBLY
     DISCRETE --> ASSEMBLY
-    STATE --> ASSEMBLY
     PROFILE --> DRIVER
     ASSEMBLY --> DRIVER
+    DRIVER --> CHECKS
+    PHYS --> CHECKS
+    CHECKS --> ACCEPT
     DRIVER --> DIAG
-    DRIVER --> ACCEPT
+    CHECKS --> DIAG
 
     ACCEPT -->|yes| COMMIT
     ACCEPT -->|no| ROLLBACK
-
+    ROLLBACK --> FALLBACK --> STEPPER
     COMMIT --> STATE
     COMMIT --> OUT
-    COMMIT --> CKPT
-    ROLLBACK --> STEPPER
-
+    COMMIT --> CKPTCTRL --> CKPT
+    OUTPLAN --> OUT
     OUT --> POST --> VIZ
     DIAG --> REPORT
     CKPT --> REPORT
