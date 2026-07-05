@@ -1,0 +1,80 @@
+flowchart LR
+    U([Config])
+    UNITS["Units + coordinate frame"]
+    TAGS["Tag registry\nphysical group schema"]
+    CQ["CadQuery\nbuild CAD"]
+    GM["Gmsh\nphysical groups + meshing"]
+    VAL["Validate geometry, tags, mesh quality"]
+    IM["Import\nGmsh → DOLFINx"]
+    FS["Spaces & measures"]
+    MDB["MatDB\ntag → params"]
+    CF["Coeff-field builder"]
+    MAT["Material/state update\nresponse + tangent"]
+    LOADS["Load/source spec"]
+    BCS["BC spec"]
+    BCB["BC builder"]
+    PHYS["UFL model\nnonlinear steady"]
+    GUESS["Initial guess / continuation"]
+    PROB["NonlinearProblem\nresidual + Jacobian callbacks"]
+    SNES["PETSc SNES solve"]
+    POST["Postprocess\nderived fields, probes, reactions"]
+    OUT["Outputs\nsolution, metadata, diagnostics"]
+
+%% Global validation metadata
+    U -- units --> UNITS
+    U -- tag_schema --> TAGS
+    UNITS -- scale/frame rules --> CQ
+    UNITS -- unit checks --> MDB
+    TAGS -- expected cell/facet groups --> GM
+
+%% Geometry + mesh
+    U -- geom_params --> CQ
+    U -- mesh_params --> GM
+    CQ -- cad_model --> GM
+    GM -- "gmsh_mesh, cell_groups, facet_groups" --> VAL
+    TAGS -- required tags --> VAL
+    UNITS -- coordinate scale --> VAL
+    VAL -- "validated gmsh_mesh, groups" --> IM
+    IM -- "mesh, cell_tags, facet_tags" --> FS
+
+%% Spaces + measures
+    U -- space_spec --> FS
+    TAGS -- measure/tag names --> FS
+
+%% Materials / coefficients
+    U -- mat_map --> MDB
+    TAGS -- cell tag validation --> MDB
+    MDB -- mat_spec --> CF
+    IM -- "mesh, cell_tags" --> CF
+    CF -- coeff_fields --> MAT
+
+%% Loads and boundary conditions
+    U -- load_map --> LOADS
+    U -- bc_map --> BCS
+    TAGS -- facet tag validation --> LOADS
+    TAGS -- facet tag validation --> BCS
+    LOADS -- "body_sources, tractions, fluxes, robin_terms" --> PHYS
+    BCS -- bc_spec --> BCB
+    IM -- "mesh, facet_tags" --> BCB
+    FS -- V --> BCB
+    BCB -- natural_terms --> PHYS
+
+%% Physics + nonlinear problem
+    U -- phys_spec --> PHYS
+    FS -- "V, u, du, v, dx, ds" --> PHYS
+    MAT -- "material response, tangent, state_vars" --> PHYS
+    PHYS -- "F(u;v), J(u;du,v)" --> PROB
+    BCB -- dirichlet_bcs --> PROB
+    PROB -- assemble callbacks --> SNES
+    U -- "initial_guess, continuation_params" --> GUESS
+    GUESS -- u0 --> SNES
+    U -- solver_params --> SNES
+    SNES -- "u_trial / Newton iterate" --> MAT
+    SNES -- "u_sol, solve_info" --> POST
+
+%% Results
+    FS -- "V, measures" --> POST
+    POST -- "derived_fields, integrals, reactions" --> OUT
+    SNES -- "residuals, iterations, convergence" --> OUT
+    U -- "config hash, provenance" --> OUT
+    IM -- "mesh, tags" --> OUT

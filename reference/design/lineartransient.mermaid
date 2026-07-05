@@ -1,0 +1,92 @@
+flowchart LR
+    U([Config])
+    UNITS["Units + coordinate frame"]
+    TAGS["Tag registry\nphysical group schema"]
+    TIME["Time controller\nt0, t_end, dt, output_times"]
+    CQ["CadQuery\nbuild CAD"]
+    GM["Gmsh\nphysical groups + meshing"]
+    VAL["Validate geometry, tags, mesh quality"]
+    IM["Import\nGmsh → DOLFINx"]
+    FS["Spaces & measures"]
+    MDB["MatDB\ntag → params"]
+    CF["Coeff-field builder"]
+    LOADS["Load/source spec"]
+    BCS["BC spec"]
+    BCB["BC builder"]
+    IC["IC init"]
+    STATE["State/history manager\nu_n, u_{n-1}, restart"]
+    PHYS["UFL model\nlinear transient templates"]
+    STEP["Instantiate step forms"]
+    ASSY["Assemble + apply BCs"]
+    KSP["PETSc KSP solve"]
+    ADV["Advance state\naccept/reject step"]
+    POST["Postprocess\nderived fields, probes, integrals"]
+    OUT["Outputs\ncheckpoints, time series, diagnostics"]
+
+%% Global validation metadata
+    U -- units --> UNITS
+    U -- tag_schema --> TAGS
+    U -- time_spec --> TIME
+    UNITS -- scale/frame rules --> CQ
+    UNITS -- unit checks --> MDB
+    TAGS -- expected cell/facet groups --> GM
+
+%% Geometry + mesh
+    U -- geom_params --> CQ
+    U -- mesh_params --> GM
+    CQ -- cad_model --> GM
+    GM -- "gmsh_mesh, cell_groups, facet_groups" --> VAL
+    TAGS -- required tags --> VAL
+    UNITS -- coordinate scale --> VAL
+    VAL -- "validated gmsh_mesh, groups" --> IM
+    IM -- "mesh, cell_tags, facet_tags" --> FS
+    U -- space_spec --> FS
+    TAGS -- measure/tag names --> FS
+
+%% Materials / coefficients
+    U -- mat_map --> MDB
+    TAGS -- cell tag validation --> MDB
+    MDB -- mat_spec --> CF
+    IM -- "mesh, cell_tags" --> CF
+
+%% Loads and boundary conditions
+    U -- load_map --> LOADS
+    U -- bc_map --> BCS
+    TAGS -- facet tag validation --> LOADS
+    TAGS -- facet tag validation --> BCS
+    BCS -- bc_spec --> BCB
+    IM -- "mesh, facet_tags" --> BCB
+    FS -- V --> BCB
+
+%% Initial state + physics templates
+    U -- ic_spec --> IC
+    FS -- V --> IC
+    IC -- "u_n, t0" --> STATE
+    U -- phys_spec --> PHYS
+    FS -- "V, u, v, dx, ds" --> PHYS
+
+%% Time loop
+    TIME -- "t, dt, step_id" --> STATE
+    STATE -- "u_n, history, restart_data" --> STEP
+    TIME -- "t, dt" --> LOADS
+    TIME -- "t, dt" --> BCB
+    CF -- coeff_fields --> STEP
+    LOADS -- "body_sources(t), tractions(t), fluxes(t), robin_terms(t)" --> STEP
+    BCB -- "dirichlet_bcs(t)" --> ASSY
+    BCB -- "natural_terms(t)" --> STEP
+    PHYS -- form_templates --> STEP
+    STEP -- "a_step, L_step" --> ASSY
+    ASSY -- "A_bc, b_bc" --> KSP
+    U -- solver_params --> KSP
+    KSP -- "u_{n+1}, solve_info" --> ADV
+    ADV -- "accepted state, diagnostics" --> STATE
+    ADV -- "step_status, suggested_dt" --> TIME
+
+%% Results
+    STATE -- "state at output_times" --> POST
+    FS -- "V, measures" --> POST
+    POST -- "derived_fields, integrals" --> OUT
+    ADV -- "solve_info, failures, timing" --> OUT
+    STATE -- checkpoints --> OUT
+    U -- "config hash, provenance" --> OUT
+    IM -- "mesh, tags" --> OUT

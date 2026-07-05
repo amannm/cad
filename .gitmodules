@@ -1,0 +1,24 @@
+[submodule "reference/cadquery"]
+	path = reference/cadquery
+	url = https://github.com/CadQuery/cadquery.git
+	ignore = all
+[submodule "reference/dolfinx"]
+	path = reference/dolfinx
+	url = https://github.com/FEniCS/dolfinx.git
+	ignore = all
+[submodule "reference/gmsh"]
+	path = reference/gmsh
+	url = https://gitlab.onelab.info/gmsh/gmsh.git
+	ignore = all
+[submodule "reference/paraview"]
+	path = reference/paraview
+	url = https://github.com/Kitware/ParaView.git
+	ignore = all
+[submodule "reference/petsc"]
+	path = reference/petsc
+	url = https://gitlab.com/petsc/petsc.git
+	ignore = all
+[submodule "reference/ufl"]
+	path = reference/ufl
+	url = https://github.com/FEniCS/ufl.git
+	ignore = all
