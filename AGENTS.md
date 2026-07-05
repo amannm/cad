@@ -1,11 +1,5 @@
 # Project objectives
 - A CAD system with multiphysics simulation support.
-- Compact design and with minimal dependencies.
-- Support for the following solver modes:
-  - Linear Steady
-  - Linear Transient
-  - Non-linear Steady
-  - Non-linear Transient
 
 # Non-goals
 - Do not include backwards compatibility, fallback behavior, resilience features.
@@ -13,7 +7,15 @@
 - Do not focus on testing at this time.
 - Do not add comments in source code.
 
-# Reference material (symlinked)
+# Codebase style
+- High density
+- Flat organization
+- Minimalistic
+- Explicitly wired
+- Internally consistent
+- Artisanal
+
+# Reference material
 - [CadQuery Source Code](reference/cadquery)
 - [Gmsh Source Code](reference/gmsh)
 - [DOLFINx Source Code](reference/dolfinx)
@@ -26,8 +28,6 @@
 
 # Environment
 - Use `uv` for all Python operations.
-
-# Capabilities
 - `.png`/`.jpeg`/`.gif`/`.webp` LLM perception enabled.
 - `.pdf` LLM perception enabled.
 - Unrestricted internet access enabled.
