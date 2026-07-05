@@ -25,7 +25,10 @@ class CommandResult:
 
 
 def mesh(problem: str, out: str) -> CommandResult:
-    spec = build_problem_spec(load_config(problem))
+    return mesh_spec(build_problem_spec(load_config(problem)), out)
+
+
+def mesh_spec(spec: ProblemSpec, out: str) -> CommandResult:
     run_dir = Path(out).resolve()
     domain, plan, manifest, artifacts = _problem_artifacts(spec, run_dir, "mesh")
     diagnostics: tuple[Diagnostic, ...] = ()
@@ -45,7 +48,10 @@ def mesh(problem: str, out: str) -> CommandResult:
 
 
 def solve(problem: str, out: str) -> CommandResult:
-    spec = build_problem_spec(load_config(problem))
+    return solve_spec(build_problem_spec(load_config(problem)), out)
+
+
+def solve_spec(spec: ProblemSpec, out: str) -> CommandResult:
     run_dir = Path(out).resolve()
     domain, plan, manifest, artifacts = _problem_artifacts(spec, run_dir, "solve")
     result = execute_solve(spec, plan, run_dir)
@@ -179,10 +185,15 @@ def _finish_problem_command(
         name=spec.name,
         mode=spec.mode,
         content_hash=spec.content_hash,
+        accepted_steps=sum(1 for step in steps if step.status == "accepted"),
+        failed_steps=sum(1 for step in steps if step.status == "failed"),
+        artifact_count=len(artifacts),
         domain=domain,
         run_plan=plan,
         manifest=manifest.output_paths["manifest"],
         manifest_hash=artifacts["manifest"].sha256,
+        backend_versions=manifest.backend_versions,
+        mpi_size=manifest.mpi_size,
         artifacts=artifacts,
         state=state,
         steps=steps,
@@ -280,6 +291,7 @@ def _restart_report(
         name=None,
         mode=state.mode if state else None,
         content_hash=state.content_hash if state else None,
+        artifact_count=len(artifacts),
         domain=None,
         run_plan=None,
         manifest=state.manifest_path if state else None,

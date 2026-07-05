@@ -32,6 +32,14 @@ class MeshBuild:
     artifacts: dict[str, Path]
 
 
+@dataclass(frozen=True)
+class QualityThreshold:
+    measure: str
+    minimum: float | None
+    maximum: float | None
+    path: tuple[str | int, ...]
+
+
 def generate_mesh(spec: ProblemSpec, mesh_dir: Path) -> MeshBuild:
     diagnostics = _cell_type_diagnostics(spec)
     if diagnostics:
@@ -52,9 +60,10 @@ def generate_mesh(spec: ProblemSpec, mesh_dir: Path) -> MeshBuild:
         _apply_sizes(spec, entities, tags)
         gmsh.model.mesh.generate(spec.mesh.dimension)
         gmsh.model.mesh.setOrder(spec.mesh.order)
+        quality_report = _quality_report(spec)
         mesh_path = mesh_dir / "model.msh"
         gmsh.write(str(mesh_path))
-        metadata = _metadata(spec, mesh_path, entities, tags)
+        metadata = _metadata(spec, mesh_path, entities, tags, quality_report)
         tag_path = mesh_dir / "tag_map.json"
         metadata_path = mesh_dir / "mesh_metadata.json"
         geometry_path = mesh_dir / "geometry_ir.json"
@@ -189,7 +198,13 @@ def _apply_sizes(spec: ProblemSpec, entities: dict[str, GeometryEntityIR], tags:
         raise MeshError(diagnostics)
 
 
-def _metadata(spec: ProblemSpec, mesh_path: Path, entities: dict[str, GeometryEntityIR], tags: TagMap) -> MeshMetadata:
+def _metadata(
+    spec: ProblemSpec,
+    mesh_path: Path,
+    entities: dict[str, GeometryEntityIR],
+    tags: TagMap,
+    quality_report: dict[str, Any],
+) -> MeshMetadata:
     node_tags, _, _ = gmsh.model.mesh.getNodes()
     _, element_tags, _ = gmsh.model.mesh.getElements(spec.mesh.dimension)
     return MeshMetadata(
@@ -204,6 +219,131 @@ def _metadata(spec: ProblemSpec, mesh_path: Path, entities: dict[str, GeometryEn
         entities=tuple(sorted(entities.values(), key=lambda entity: entity.name)),
         tags=tags,
         physical_groups={binding.physical_name: binding.physical_id for binding in tags.bindings},
+        quality_report=quality_report,
+    )
+
+
+def _quality_report(spec: ProblemSpec) -> dict[str, Any]:
+    element_tags = _element_tags(spec.mesh.dimension)
+    if not element_tags:
+        raise MeshError(
+            [
+                Diagnostic(
+                    code="MESH_EMPTY",
+                    message="Generated mesh contains no top-dimensional elements.",
+                    path=("mesh",),
+                    source="mesh",
+                )
+            ]
+        )
+    thresholds = _quality_thresholds(spec.mesh.quality)
+    measures = _quality_measures(spec.mesh.dimension, thresholds)
+    stats: dict[str, dict[str, float | int]] = {}
+    diagnostics: list[Diagnostic] = []
+    for measure in measures:
+        try:
+            values = [float(value) for value in gmsh.model.mesh.getElementQualities(element_tags, measure)]
+        except Exception as exc:
+            diagnostics.append(
+                Diagnostic(
+                    code="MESH_QUALITY_MEASURE_FAILED",
+                    message=f"Could not compute mesh quality measure '{measure}'.",
+                    path=("mesh", "quality", measure),
+                    source="mesh",
+                    backend_error=str(exc),
+                )
+            )
+            continue
+        stats[measure] = {
+            "count": len(values),
+            "min": min(values),
+            "max": max(values),
+            "mean": sum(values) / len(values),
+        }
+    for threshold in thresholds:
+        observed = stats.get(threshold.measure)
+        if observed is None:
+            continue
+        if threshold.minimum is not None and float(observed["min"]) < threshold.minimum:
+            diagnostics.append(
+                Diagnostic(
+                    code="MESH_QUALITY_THRESHOLD_FAILED",
+                    message=f"Mesh quality '{threshold.measure}' minimum is below threshold.",
+                    path=threshold.path,
+                    source="mesh",
+                    payload={"observed": observed["min"], "threshold": threshold.minimum},
+                )
+            )
+        if threshold.maximum is not None and float(observed["max"]) > threshold.maximum:
+            diagnostics.append(
+                Diagnostic(
+                    code="MESH_QUALITY_THRESHOLD_FAILED",
+                    message=f"Mesh quality '{threshold.measure}' maximum is above threshold.",
+                    path=threshold.path,
+                    source="mesh",
+                    payload={"observed": observed["max"], "threshold": threshold.maximum},
+                )
+            )
+    if diagnostics:
+        raise MeshError(diagnostics)
+    return {
+        "elements": len(element_tags),
+        "measures": stats,
+        "thresholds": [
+            {"measure": threshold.measure, "min": threshold.minimum, "max": threshold.maximum}
+            for threshold in thresholds
+        ],
+    }
+
+
+def _element_tags(dimension: int) -> list[int]:
+    _, element_tags, _ = gmsh.model.mesh.getElements(dimension)
+    return [int(tag) for block in element_tags for tag in block]
+
+
+def _quality_measures(dimension: int, thresholds: tuple[QualityThreshold, ...]) -> tuple[str, ...]:
+    defaults = {
+        1: ("minEdge", "maxEdge"),
+        2: ("minSICN", "gamma", "minEdge", "maxEdge", "volume"),
+        3: ("minSICN", "gamma", "minEdge", "maxEdge", "volume"),
+    }
+    return tuple(dict.fromkeys((*defaults[dimension], *(threshold.measure for threshold in thresholds))))
+
+
+def _quality_thresholds(config: dict[str, Any]) -> tuple[QualityThreshold, ...]:
+    thresholds: list[QualityThreshold] = []
+    for measure, value in sorted(config.items()):
+        path = ("mesh", "quality", measure)
+        if isinstance(value, dict) and ("min" in value or "max" in value or "measure" in value):
+            thresholds.append(
+                QualityThreshold(
+                    measure=str(value.get("measure", measure)),
+                    minimum=_threshold_value(value.get("min"), (*path, "min")) if value.get("min") is not None else None,
+                    maximum=_threshold_value(value.get("max"), (*path, "max")) if value.get("max") is not None else None,
+                    path=path,
+                )
+            )
+        else:
+            thresholds.append(QualityThreshold(measure=measure, minimum=_threshold_value(value, path), maximum=None, path=path))
+    return tuple(thresholds)
+
+
+def _threshold_value(value: Any, path: tuple[str | int, ...]) -> float:
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, dict) and "magnitude" in value:
+        magnitude = value["magnitude"]
+        if isinstance(magnitude, int | float):
+            return float(magnitude)
+    raise MeshError(
+        [
+            Diagnostic(
+                code="MESH_QUALITY_THRESHOLD_INVALID",
+                message="Mesh quality threshold must be scalar.",
+                path=path,
+                source="mesh",
+            )
+        ]
     )
 
 

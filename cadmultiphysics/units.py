@@ -32,15 +32,16 @@ class UnitDiagnostics(Exception):
         super().__init__(diagnostics[0].message if diagnostics else "Unit diagnostics")
 
 
-def unit_spec(value: str, path: Sequence[str | int] = ()) -> UnitSpec:
+def unit_spec(value: Any, path: Sequence[str | int] = ()) -> UnitSpec:
+    unit = value if isinstance(value, str) else str(value)
     try:
-        quantity = (1 * ureg.Unit(value)).to_base_units()
+        quantity = (1 * ureg.Unit(unit)).to_base_units()
     except (UndefinedUnitError, ValueError) as exc:
         raise UnitDiagnostics(
             [
                 Diagnostic(
                     code="UNIT_UNKNOWN",
-                    message=f"Unknown unit '{value}'.",
+                    message=f"Unknown unit '{unit}'.",
                     path=tuple(path),
                     source="units",
                     backend_error=str(exc),
@@ -56,6 +57,8 @@ def canonical_quantity(
     expected_dimension: str | None = None,
 ) -> QuantitySpec:
     try:
+        if _is_pint_quantity(value):
+            return _pint_quantity(value, path, expected_dimension)
         if _is_vector_quantity(value):
             return _vector_quantity(value, path, expected_dimension)
         quantity = _scalar_quantity(value).to_base_units()
@@ -89,6 +92,8 @@ def canonical_quantity(
 def canonical_value(value: Any, path: Sequence[str | int] = ()) -> Any:
     if isinstance(value, Mapping):
         return {str(key): canonical_value(inner, (*path, str(key))) for key, inner in sorted(value.items())}
+    if _is_pint_quantity(value):
+        return canonical_quantity(value, path).model_dump(mode="json")
     if _is_vector_quantity(value):
         return canonical_quantity(value, path).model_dump(mode="json")
     if isinstance(value, Sequence) and not isinstance(value, str):
@@ -121,6 +126,8 @@ def dimension_of(unit: str) -> str:
 
 
 def _scalar_quantity(value: Any):
+    if _is_pint_quantity(value):
+        return value
     if isinstance(value, str):
         return ureg.Quantity(value)
     if isinstance(value, int | float):
@@ -154,10 +161,41 @@ def _vector_quantity(values: Sequence[Any], path: Sequence[str | int], expected_
     )
 
 
+def _pint_quantity(value: Any, path: Sequence[str | int], expected_dimension: str | None) -> QuantitySpec:
+    quantity = value.to_base_units()
+    dimension = str(quantity.dimensionality)
+    if expected_dimension is not None and dimension != expected_dimension:
+        raise UnitDiagnostics(
+            [
+                Diagnostic(
+                    code="UNIT_DIMENSION_MISMATCH",
+                    message=f"Expected dimension {expected_dimension}, got {dimension}.",
+                    path=tuple(path),
+                    source="units",
+                )
+            ]
+        )
+    return QuantitySpec(magnitude=_magnitude(quantity.magnitude), unit=_unit(quantity), dimension=dimension)
+
+
 def _is_vector_quantity(value: Any) -> bool:
     return isinstance(value, Sequence) and not isinstance(value, str) and all(
-        isinstance(item, str | int | float) for item in value
+        isinstance(item, str | int | float) or _is_pint_quantity(item) for item in value
     )
+
+
+def _is_pint_quantity(value: Any) -> bool:
+    return isinstance(value, ureg.Quantity)
+
+
+def _magnitude(value: Any) -> float | tuple[float, ...]:
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        if not value:
+            raise ValueError("Empty quantity vector")
+        return tuple(float(item) for item in value)
+    return float(value)
 
 
 def _unit(quantity: Any) -> str:
@@ -167,3 +205,17 @@ def _unit(quantity: Any) -> str:
 
 def _path(path: Sequence[str | int]) -> str:
     return ".".join(str(part) for part in path) if path else "<root>"
+
+
+m = ureg.meter
+mm = ureg.millimeter
+cm = ureg.centimeter
+kg = ureg.kilogram
+s = ureg.second
+K = ureg.kelvin
+N = ureg.newton
+Pa = ureg.pascal
+GPa = ureg.gigapascal
+J = ureg.joule
+W = ureg.watt
+dimensionless = ureg.dimensionless

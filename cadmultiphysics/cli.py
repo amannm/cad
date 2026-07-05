@@ -95,14 +95,29 @@ def _inspect(args: argparse.Namespace) -> int:
         _print_json(payload)
         return 0
     status = payload.get("status", "<unknown>")
+    command = payload.get("command", "<unknown>")
+    name = payload.get("name", "<unknown>")
     domain = payload.get("domain") or {}
     mode = payload.get("mode") or domain.get("mode", "<unknown>")
     content_hash = payload.get("content_hash") or domain.get("content_hash", "<unknown>")
+    artifacts = payload.get("artifacts") or {}
+    diagnostics = payload.get("diagnostics") or []
+    accepted_steps = payload.get("accepted_steps", 0)
+    failed_steps = payload.get("failed_steps", 0)
+    manifest = payload.get("manifest")
     print(f"status {status}")
+    print(f"command {command}")
+    print(f"name {name}")
     print(f"mode {mode}")
     print(f"content_hash {content_hash}")
-    if "diagnostics" in payload:
-        print(f"diagnostics {len(payload['diagnostics'])}")
+    print(f"steps accepted={accepted_steps} failed={failed_steps}")
+    print(f"artifacts {len(artifacts)}")
+    if manifest:
+        print(f"manifest {manifest}")
+    print(f"diagnostics {len(diagnostics)}")
+    for diagnostic in diagnostics[:5]:
+        path = ".".join(str(part) for part in diagnostic.get("path", ())) if diagnostic.get("path") else "<root>"
+        print(f"diagnostic {diagnostic.get('code', '<unknown>')} {path}")
     return 0
 
 

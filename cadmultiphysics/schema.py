@@ -322,6 +322,7 @@ class MeshMetadata(StrictModel):
     entities: tuple[GeometryEntityIR, ...]
     tags: TagMap
     physical_groups: dict[str, int]
+    quality_report: dict[str, Any] = Field(default_factory=dict)
 
 
 class RunManifest(StrictModel):
@@ -418,10 +419,15 @@ class RunReport(StrictModel):
     name: str | None = None
     mode: Mode | None = None
     content_hash: str | None = None
+    accepted_steps: int = Field(default=0, ge=0)
+    failed_steps: int = Field(default=0, ge=0)
+    artifact_count: int = Field(default=0, ge=0)
     domain: DomainIR | None = None
     run_plan: RunPlan | None = None
     manifest: str | None = None
     manifest_hash: str | None = None
+    backend_versions: dict[str, str | None] = Field(default_factory=dict)
+    mpi_size: int | None = None
     artifacts: dict[str, RunArtifact] = Field(default_factory=dict)
     state: SolutionState | None = None
     steps: tuple[StepRecord, ...] = ()

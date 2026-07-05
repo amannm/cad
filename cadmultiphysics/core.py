@@ -481,7 +481,7 @@ def _mesh_plan(mesh: Any) -> MeshPlan:
         ),
         curvature=mesh.curvature,
         partitions=mesh.partitions,
-        quality={key: canonical_value(value, ("mesh", "quality", key)) for key, value in sorted(mesh.quality.items())},
+        quality={key: _mesh_quality_value(key, value) for key, value in sorted(mesh.quality.items())},
     )
 
 
@@ -492,6 +492,16 @@ def _time_plan(time: Any) -> TimePlan:
         step=canonical_quantity(time.step, ("time", "step"), TIME),
         scheme=time.scheme,
     )
+
+
+def _mesh_quality_value(key: str, value: Any) -> Any:
+    if not isinstance(value, dict):
+        return canonical_value(value, ("mesh", "quality", key))
+    result: dict[str, Any] = {}
+    for inner_key, inner_value in sorted(value.items()):
+        path = ("mesh", "quality", key, inner_key)
+        result[str(inner_key)] = str(inner_value) if inner_key == "measure" else canonical_value(inner_value, path)
+    return result
 
 
 def _validate_time_values(spec: ProblemSpec) -> None:
