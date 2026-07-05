@@ -41,6 +41,10 @@ materials:
       E: 200 GPa
       nu: 0.3
       k: 45 W/(m*K)
+      alpha: 12e-6 1/K
+      T0: 300 K
+      rho: 7850 kg/m^3
+      cp: 470 J/(kg*K)
 boundary_conditions:
   - name: fixed_left
     on: fixed_left
@@ -68,16 +72,10 @@ solver:
   nonlinear:
     snes_type: newtonls
     snes_rtol: 1.0e-8
+    snes_max_it: 25
   linear:
-    ksp_type: gmres
-    pc_type: fieldsplit
-  fieldsplits:
-    u:
-      ksp_type: preonly
-      pc_type: hypre
-    T:
-      ksp_type: preonly
-      pc_type: gamg
+    ksp_type: preonly
+    pc_type: lu
 output:
   format: vtx
   fields: [u, T]

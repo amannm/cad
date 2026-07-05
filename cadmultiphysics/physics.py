@@ -51,6 +51,7 @@ MATERIAL_CONTRACTS: dict[str, MaterialContract] = {
             "nu": ParameterRule(DIMENSIONLESS, lower_open=-1.0, upper_open=0.5),
             "k": ParameterRule(THERMAL_CONDUCTIVITY, positive=True),
             "alpha": ParameterRule(INV_TEMPERATURE, required=False),
+            "T0": ParameterRule(TEMPERATURE, required=False),
             "rho": ParameterRule(DENSITY, required=False, positive=True),
             "cp": ParameterRule(HEAT_CAPACITY, required=False, positive=True),
         },
@@ -105,6 +106,7 @@ def physics_diagnostics(spec: ProblemSpec) -> list[Diagnostic]:
                 )
         diagnostics.extend(_parameter_diagnostics(name, material.model, material.parameters, contract.parameters))
         diagnostics.extend(_transient_material_diagnostics(spec.mode, name, material.model, material.parameters))
+        diagnostics.extend(_reference_temperature_diagnostics(spec.mode, name, material.model, material.parameters))
     diagnostics.extend(_bc_diagnostics(spec))
     diagnostics.extend(_load_diagnostics(spec, field_roles))
     return diagnostics
@@ -154,7 +156,7 @@ def _parameter_diagnostics(
 
 
 def _transient_material_diagnostics(mode: str, material_name: str, model: str, parameters: dict[str, Any]) -> list[Diagnostic]:
-    if mode != "linear_transient" or model != "isotropic_heat":
+    if mode not in {"linear_transient", "nonlinear_transient"} or model not in {"isotropic_heat", "thermoelastic_small_strain"}:
         return []
     return [
         Diagnostic(
@@ -165,6 +167,19 @@ def _transient_material_diagnostics(mode: str, material_name: str, model: str, p
         )
         for key in ("rho", "cp")
         if key not in parameters
+    ]
+
+
+def _reference_temperature_diagnostics(mode: str, material_name: str, model: str, parameters: dict[str, Any]) -> list[Diagnostic]:
+    if not mode.endswith("_steady") or model != "thermoelastic_small_strain" or "alpha" not in parameters or "T0" in parameters:
+        return []
+    return [
+        Diagnostic(
+            code="PHYSICS_PARAMETER_REQUIRED",
+            message=f"Material model '{model}' requires parameter 'T0' when steady thermal expansion is enabled.",
+            path=("materials", material_name, "parameters", "T0"),
+            source="physics",
+        )
     ]
 
 
