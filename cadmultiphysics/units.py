@@ -98,6 +98,8 @@ def canonical_value(value: Any, path: Sequence[str | int] = ()) -> Any:
         return canonical_quantity(value, path).model_dump(mode="json")
     if isinstance(value, Sequence) and not isinstance(value, str):
         return [canonical_value(inner, (*path, index)) for index, inner in enumerate(value)]
+    if isinstance(value, bool):
+        return value
     if isinstance(value, str):
         return canonical_quantity(value, path).model_dump(mode="json")
     if isinstance(value, int | float):
@@ -130,6 +132,8 @@ def _scalar_quantity(value: Any):
         return value
     if isinstance(value, str):
         return ureg.Quantity(value)
+    if isinstance(value, bool):
+        raise TypeError("Expected scalar quantity, got bool")
     if isinstance(value, int | float):
         return ureg.Quantity(value)
     raise TypeError(f"Expected scalar quantity, got {type(value).__name__}")
@@ -180,7 +184,7 @@ def _pint_quantity(value: Any, path: Sequence[str | int], expected_dimension: st
 
 def _is_vector_quantity(value: Any) -> bool:
     return isinstance(value, Sequence) and not isinstance(value, str) and all(
-        isinstance(item, str | int | float) or _is_pint_quantity(item) for item in value
+        isinstance(item, str) or (isinstance(item, int | float) and not isinstance(item, bool)) or _is_pint_quantity(item) for item in value
     )
 
 

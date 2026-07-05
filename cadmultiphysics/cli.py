@@ -48,11 +48,13 @@ def _parser() -> argparse.ArgumentParser:
         command = subparsers.add_parser(name)
         command.add_argument("problem")
         command.add_argument("--out", required=True)
+        command.add_argument("--overwrite", action="store_true")
         command.add_argument("--json", action="store_true")
         command.set_defaults(func=_mesh if name == "mesh" else _solve)
     restart = subparsers.add_parser("restart")
     restart.add_argument("restart")
     restart.add_argument("--out", required=True)
+    restart.add_argument("--overwrite", action="store_true")
     restart.add_argument("--json", action="store_true")
     restart.set_defaults(func=_restart)
     return parser
@@ -122,15 +124,15 @@ def _inspect(args: argparse.Namespace) -> int:
 
 
 def _mesh(args: argparse.Namespace) -> int:
-    return _emit_command_result(mesh(args.problem, args.out), args)
+    return _emit_command_result(mesh(args.problem, args.out, args.overwrite), args)
 
 
 def _solve(args: argparse.Namespace) -> int:
-    return _emit_command_result(solve(args.problem, args.out), args)
+    return _emit_command_result(solve(args.problem, args.out, args.overwrite), args)
 
 
 def _restart(args: argparse.Namespace) -> int:
-    return _emit_command_result(restart(args.restart, args.out), args)
+    return _emit_command_result(restart(args.restart, args.out, args.overwrite), args)
 
 
 def _version(args: argparse.Namespace) -> int:

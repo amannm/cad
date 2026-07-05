@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from cadmultiphysics.diagnostics import Diagnostic, schema_diagnostics
 from cadmultiphysics.errors import SchemaError, UnitError
+from cadmultiphysics.physics import physics_diagnostics
 from cadmultiphysics.schema import (
     BoundaryConditionSpec,
     DomainIR,
@@ -83,6 +84,9 @@ def build_problem_spec(data: dict[str, Any]) -> ProblemSpec:
         spec = _canonical_problem(raw)
     except UnitDiagnostics as exc:
         raise UnitError(exc.diagnostics) from exc
+    diagnostics = physics_diagnostics(spec)
+    if diagnostics:
+        raise SchemaError(diagnostics)
     return spec.model_copy(update={"content_hash": content_hash(spec)})
 
 

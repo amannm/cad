@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -10,7 +11,7 @@ from pydantic import ValidationError
 
 from cadmultiphysics.core import build_domain_ir, build_problem_spec, build_run_manifest, build_run_plan
 from cadmultiphysics.diagnostics import Diagnostic, schema_diagnostics
-from cadmultiphysics.errors import MeshError
+from cadmultiphysics.errors import MeshError, OutputError
 from cadmultiphysics.io import load_config, write_diagnostics_csv, write_json
 from cadmultiphysics.mesh import generate_mesh
 from cadmultiphysics.schema import DomainIR, MeshMetadata, ProblemSpec, RestartState, RunArtifact, RunManifest, RunPlan, RunReport, SolutionState, StepRecord
@@ -24,12 +25,13 @@ class CommandResult:
     exit_code: int
 
 
-def mesh(problem: str, out: str) -> CommandResult:
-    return mesh_spec(build_problem_spec(load_config(problem)), out)
+def mesh(problem: str, out: str, overwrite: bool = False) -> CommandResult:
+    return mesh_spec(build_problem_spec(load_config(problem)), out, overwrite)
 
 
-def mesh_spec(spec: ProblemSpec, out: str) -> CommandResult:
+def mesh_spec(spec: ProblemSpec, out: str, overwrite: bool = False) -> CommandResult:
     run_dir = Path(out).resolve()
+    _prepare_run_dir(run_dir, overwrite)
     domain, plan, manifest, artifacts = _problem_artifacts(spec, run_dir, "mesh")
     diagnostics: tuple[Diagnostic, ...] = ()
     try:
@@ -39,7 +41,7 @@ def mesh_spec(spec: ProblemSpec, out: str) -> CommandResult:
         manifest = _write_manifest(spec, run_dir, artifacts)
         artifacts["manifest"] = _artifact(run_dir / "manifest.json")
         restart_path = run_dir / "restarts" / "restart_0000.json"
-        restart_state = _mesh_restart_state(spec, manifest, artifacts["manifest"].sha256)
+        restart_state = _mesh_restart_state(spec, manifest, artifacts["manifest"].sha256, artifacts)
         write_json(restart_path, restart_state.model_dump(mode="json"))
         artifacts["restart_0000"] = _artifact(restart_path)
     except MeshError as exc:
@@ -47,12 +49,13 @@ def mesh_spec(spec: ProblemSpec, out: str) -> CommandResult:
     return _finish_problem_command("mesh", spec, domain, plan, manifest, artifacts, diagnostics, run_dir, 1 if diagnostics else 0)
 
 
-def solve(problem: str, out: str) -> CommandResult:
-    return solve_spec(build_problem_spec(load_config(problem)), out)
+def solve(problem: str, out: str, overwrite: bool = False) -> CommandResult:
+    return solve_spec(build_problem_spec(load_config(problem)), out, overwrite)
 
 
-def solve_spec(spec: ProblemSpec, out: str) -> CommandResult:
+def solve_spec(spec: ProblemSpec, out: str, overwrite: bool = False) -> CommandResult:
     run_dir = Path(out).resolve()
+    _prepare_run_dir(run_dir, overwrite)
     domain, plan, manifest, artifacts = _problem_artifacts(spec, run_dir, "solve")
     diagnostics: tuple[Diagnostic, ...] = ()
     state: SolutionState | None = None
@@ -71,7 +74,7 @@ def solve_spec(spec: ProblemSpec, out: str) -> CommandResult:
         manifest = _write_manifest(spec, run_dir, artifacts)
         artifacts["manifest"] = _artifact(run_dir / "manifest.json")
         restart_path = run_dir / "restarts" / "restart_0000.json"
-        restart_state = _solve_restart_state(spec, manifest, artifacts["manifest"].sha256, result.state)
+        restart_state = _solve_restart_state(spec, manifest, artifacts["manifest"].sha256, result.state, artifacts)
         write_json(restart_path, restart_state.model_dump(mode="json"))
         artifacts["restart_0000"] = _artifact(restart_path)
     except MeshError as exc:
@@ -82,9 +85,9 @@ def solve_spec(spec: ProblemSpec, out: str) -> CommandResult:
     return _finish_problem_command("solve", spec, domain, plan, manifest, artifacts, diagnostics, run_dir, exit_code, state, steps)
 
 
-def restart(restart_path: str, out: str) -> CommandResult:
+def restart(restart_path: str, out: str, overwrite: bool = False) -> CommandResult:
     run_dir = Path(out).resolve()
-    _ensure_run_dirs(run_dir)
+    _prepare_run_dir(run_dir, overwrite)
     source = Path(restart_path)
     artifacts: dict[str, RunArtifact] = {}
     state = _load_restart_state(source)
@@ -153,7 +156,12 @@ def _write_mesh_artifacts(metadata: MeshMetadata, artifacts: dict[str, Path]) ->
     write_json(artifacts["geometry_ir"], [entity.model_dump(mode="json") for entity in metadata.entities])
 
 
-def _mesh_restart_state(spec: ProblemSpec, manifest: RunManifest, manifest_hash: str) -> RestartState:
+def _mesh_restart_state(
+    spec: ProblemSpec,
+    manifest: RunManifest,
+    manifest_hash: str,
+    artifacts: dict[str, RunArtifact],
+) -> RestartState:
     return RestartState(
         schema_version=spec.version,
         content_hash=spec.content_hash,
@@ -163,11 +171,17 @@ def _mesh_restart_state(spec: ProblemSpec, manifest: RunManifest, manifest_hash:
         fields=tuple(field.name for field in spec.fields),
         step_index=0,
         time=spec.time.start if spec.time else None,
-        artifacts={"mesh": manifest.output_paths["mesh"]},
+        artifacts=_restart_artifacts(artifacts, ("model_msh", "mesh_metadata", "tag_map", "geometry_ir")),
     )
 
 
-def _solve_restart_state(spec: ProblemSpec, manifest: RunManifest, manifest_hash: str, state: SolutionState) -> RestartState:
+def _solve_restart_state(
+    spec: ProblemSpec,
+    manifest: RunManifest,
+    manifest_hash: str,
+    state: SolutionState,
+    artifacts: dict[str, RunArtifact],
+) -> RestartState:
     return RestartState(
         schema_version=spec.version,
         content_hash=spec.content_hash,
@@ -178,7 +192,7 @@ def _solve_restart_state(spec: ProblemSpec, manifest: RunManifest, manifest_hash
         step_index=state.committed_step,
         time=_state_time(state),
         state_hash=state.state_hash,
-        artifacts={"state": str(Path(manifest.output_paths["restarts"]) / "state_committed.json")},
+        artifacts=_restart_artifacts(artifacts, ("model_msh", "mesh_metadata", "tag_map", "geometry_ir", "solution_state")),
     )
 
 
@@ -271,6 +285,7 @@ def _load_restart_state(source: Path) -> RestartState | tuple[Diagnostic, ...]:
 
 
 def _restart_diagnostics(state: RestartState, source: Path) -> tuple[Diagnostic, ...]:
+    diagnostics: list[Diagnostic] = []
     manifest_path = Path(state.manifest_path)
     if not manifest_path.is_absolute():
         manifest_path = source.parent / manifest_path
@@ -283,18 +298,172 @@ def _restart_diagnostics(state: RestartState, source: Path) -> tuple[Diagnostic,
                 source="restart",
             ),
         )
+    try:
+        manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return (
+            Diagnostic(
+                code="RESTART_MANIFEST_READ_FAILED",
+                message=f"Could not read restart manifest '{manifest_path}'.",
+                path=("manifest_path",),
+                source="restart",
+                backend_error=str(exc),
+            ),
+        )
+    try:
+        manifest = RunManifest.model_validate(manifest_payload)
+    except ValidationError as exc:
+        return tuple(
+            Diagnostic(
+                code="RESTART_MANIFEST_INVALID",
+                message=diagnostic.message,
+                path=("manifest_path", *diagnostic.path),
+                source="restart",
+                backend_error=diagnostic.backend_error,
+            )
+            for diagnostic in schema_diagnostics(exc)
+        )
     observed = _sha256(manifest_path)
     if observed != state.manifest_hash:
-        return (
+        diagnostics.append(
             Diagnostic(
                 code="RESTART_MANIFEST_HASH_MISMATCH",
                 message="Restart manifest hash does not match restart metadata.",
                 path=("manifest_hash",),
                 source="restart",
                 payload={"expected": state.manifest_hash, "observed": observed},
-            ),
+            )
         )
-    return ()
+    if manifest.content_hash != state.content_hash:
+        diagnostics.append(
+            Diagnostic(
+                code="RESTART_CONTENT_HASH_MISMATCH",
+                message="Restart content hash does not match manifest content hash.",
+                path=("content_hash",),
+                source="restart",
+                payload={"expected": state.content_hash, "observed": manifest.content_hash},
+            )
+        )
+    layout = tuple(str(field) for field in manifest.restart.get("field_layout", ()))
+    if layout != state.fields:
+        diagnostics.append(
+            Diagnostic(
+                code="RESTART_FIELD_LAYOUT_MISMATCH",
+                message="Restart field layout does not match manifest field layout.",
+                path=("fields",),
+                source="restart",
+                payload={"expected": state.fields, "observed": layout},
+            )
+        )
+    if not state.artifacts:
+        diagnostics.append(
+            Diagnostic(
+                code="RESTART_ARTIFACTS_MISSING",
+                message="Restart metadata contains no artifact paths.",
+                path=("artifacts",),
+                source="restart",
+            )
+        )
+    for name, path_value in sorted(state.artifacts.items()):
+        artifact_path = _restart_artifact_path(path_value, source)
+        if not artifact_path.exists():
+            diagnostics.append(
+                Diagnostic(
+                    code="RESTART_ARTIFACT_MISSING",
+                    message=f"Restart artifact '{name}' does not exist.",
+                    path=("artifacts", name),
+                    source="restart",
+                    payload={"path": str(artifact_path)},
+                )
+            )
+            continue
+        expected_hash = manifest.artifact_hashes.get(name)
+        if expected_hash is not None:
+            observed_hash = _sha256(artifact_path)
+            if observed_hash != expected_hash:
+                diagnostics.append(
+                    Diagnostic(
+                        code="RESTART_ARTIFACT_HASH_MISMATCH",
+                        message=f"Restart artifact '{name}' hash does not match manifest.",
+                        path=("artifacts", name),
+                        source="restart",
+                        payload={"expected": expected_hash, "observed": observed_hash},
+                    )
+                )
+    if state.state_hash is not None:
+        state_path_value = state.artifacts.get("solution_state")
+        if state_path_value is None:
+            diagnostics.append(
+                Diagnostic(
+                    code="RESTART_STATE_ARTIFACT_MISSING",
+                    message="Restart state hash requires a solution_state artifact.",
+                    path=("artifacts",),
+                    source="restart",
+                )
+            )
+        else:
+            diagnostics.extend(_solution_state_restart_diagnostics(state, _restart_artifact_path(state_path_value, source)))
+    return tuple(diagnostics)
+
+
+def _solution_state_restart_diagnostics(state: RestartState, state_path: Path) -> list[Diagnostic]:
+    if not state_path.exists():
+        return []
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+        solution = SolutionState.model_validate(payload)
+    except (OSError, json.JSONDecodeError, ValidationError) as exc:
+        return [
+            Diagnostic(
+                code="RESTART_STATE_INVALID",
+                message=f"Could not validate solution state '{state_path}'.",
+                path=("artifacts", "solution_state"),
+                source="restart",
+                backend_error=str(exc),
+            )
+        ]
+    diagnostics: list[Diagnostic] = []
+    if solution.state_hash != state.state_hash:
+        diagnostics.append(
+            Diagnostic(
+                code="RESTART_STATE_HASH_MISMATCH",
+                message="Restart state hash does not match committed solution state.",
+                path=("state_hash",),
+                source="restart",
+                payload={"expected": state.state_hash, "observed": solution.state_hash},
+            )
+        )
+    if solution.content_hash != state.content_hash:
+        diagnostics.append(
+            Diagnostic(
+                code="RESTART_STATE_CONTENT_HASH_MISMATCH",
+                message="Committed solution state content hash does not match restart content hash.",
+                path=("content_hash",),
+                source="restart",
+                payload={"expected": state.content_hash, "observed": solution.content_hash},
+            )
+        )
+    if solution.fields != state.fields:
+        diagnostics.append(
+            Diagnostic(
+                code="RESTART_STATE_FIELD_LAYOUT_MISMATCH",
+                message="Committed solution state fields do not match restart fields.",
+                path=("fields",),
+                source="restart",
+                payload={"expected": state.fields, "observed": solution.fields},
+            )
+        )
+    if solution.committed_step != state.step_index:
+        diagnostics.append(
+            Diagnostic(
+                code="RESTART_STATE_STEP_MISMATCH",
+                message="Committed solution state step does not match restart step.",
+                path=("step_index",),
+                source="restart",
+                payload={"expected": state.step_index, "observed": solution.committed_step},
+            )
+        )
+    return diagnostics
 
 
 def _restart_report(
@@ -321,6 +490,42 @@ def _restart_report(
 def _ensure_run_dirs(run_dir: Path) -> None:
     for path in (run_dir, run_dir / "mesh", run_dir / "fields", run_dir / "restarts", run_dir / "logs"):
         path.mkdir(parents=True, exist_ok=True)
+
+
+def _prepare_run_dir(run_dir: Path, overwrite: bool) -> None:
+    if run_dir.exists():
+        if run_dir.is_file():
+            if not overwrite:
+                raise _output_exists(run_dir)
+            run_dir.unlink()
+        elif any(run_dir.iterdir()):
+            if not overwrite:
+                raise _output_exists(run_dir)
+            shutil.rmtree(run_dir)
+    _ensure_run_dirs(run_dir)
+
+
+def _output_exists(run_dir: Path) -> OutputError:
+    return OutputError(
+        [
+            Diagnostic(
+                code="OUTPUT_EXISTS",
+                message=f"Output path '{run_dir}' already exists and is not empty.",
+                path=("out",),
+                source="output",
+                hint="Pass --overwrite to replace the run directory.",
+            )
+        ]
+    )
+
+
+def _restart_artifacts(artifacts: dict[str, RunArtifact], names: tuple[str, ...]) -> dict[str, str]:
+    return {name: artifacts[name].path for name in names if name in artifacts}
+
+
+def _restart_artifact_path(path_value: str, source: Path) -> Path:
+    path = Path(path_value)
+    return path if path.is_absolute() else source.parent / path
 
 
 def _artifact(path: Path) -> RunArtifact:
