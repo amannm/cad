@@ -1,0 +1,51 @@
+flowchart LR
+    CFG["Config\nuser input, units, solver choices"]
+    SPEC["ProblemSpec\ncanonical normalized hashable spec"]
+    GEOM["GeometryModel\nCAD model + semantic NameMap"]
+    MESH["SemanticMesh\nGmsh/DOLFINx mesh, physical groups, tags, coverage"]
+    DISCRETE["DiscreteModel\nspaces, measures, dofs, materials, BCs, loads"]
+    PHYS["PhysicsModel\nfields, schemas, forms, outputs, invariants"]
+    STATE["StateStore\ncurrent/history/trial state, commit/rollback"]
+    SOLVER["SolverDriver\nlinear/nonlinear + steady/transient policy"]
+    POST["Postprocess\nprobes, integrals, derived fields, invariants"]
+    VIZ["VisualizationBundle\nmesh, fields, tags, time, metadata"]
+    CKPT["CheckpointManifest\nstrict hash/signature restart contract"]
+    REPORT["RunReport\nstatus, residuals, timings, warnings, PETSc snapshot, artifact hashes"]
+    STORE["ArtifactStore\nspec, geometry, mesh, forms, checkpoints, outputs, provenance"]
+
+    UNITS["Units\nnormalize values + dimensional metadata"]
+    VALID["Validation\nschema, geometry, mesh tags, BCs, forms, restart, output"]
+    PROFILE["SolverProfile\nPETSc root prefix, child prefixes, defaults, block policy"]
+
+    CFG --> SPEC
+    UNITS -.-> SPEC
+    SPEC --> GEOM
+    GEOM --> MESH
+    MESH --> DISCRETE
+    PHYS -. declares spaces/forms .-> DISCRETE
+    DISCRETE --> PHYS
+    DISCRETE --> STATE
+    STATE --> SOLVER
+    PHYS --> SOLVER
+    PROFILE --> SOLVER
+    SOLVER --> POST
+    POST --> VIZ
+    SOLVER --> CKPT
+    SOLVER --> REPORT
+
+    SPEC <--> STORE
+    GEOM --> STORE
+    MESH --> STORE
+    DISCRETE --> STORE
+    CKPT --> STORE
+    VIZ --> STORE
+    STORE --> REPORT
+
+    VALID -.-> SPEC
+    VALID -.-> GEOM
+    VALID -.-> MESH
+    VALID -.-> DISCRETE
+    VALID -.-> PHYS
+    VALID -.-> STATE
+    VALID -.-> SOLVER
+    VALID -.-> VIZ

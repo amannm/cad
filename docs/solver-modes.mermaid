@@ -1,0 +1,36 @@
+flowchart TD
+    DRIVER["SolverDriver\nselected by ProblemSpec.mode"]
+    PROFILE["SolverProfile\nPETSc options, prefixes, defaults, fallbacks"]
+    PHYS["PhysicsModel\nforms, outputs, invariants"]
+    DISCRETE["DiscreteModel\nspaces, dofs, measures, BCs, field layout"]
+    STATE["StateStore\ninitial/history/trial state, commit/rollback"]
+    REPORT["RunReport\nconvergence, residuals, timings, warnings, option snapshot"]
+    CKPT["CheckpointManifest\nstrict restart compatibility"]
+
+    DRIVER --> MODE{"Solver mode"}
+    PROFILE -.-> DRIVER
+    PHYS -.-> DRIVER
+    DISCRETE -.-> DRIVER
+    STATE -.-> DRIVER
+
+    MODE --> LS["linear_steady\nvalidate forms\nassemble A,b,P once\napply BCs/nullspace\nKSP solve\nverify residual/invariants"]
+    MODE --> LT["linear_transient\nfor each step: begin\nassemble/reuse step system\nKSP solve\nvalidate, accept, output, checkpoint"]
+    MODE --> NS["nonlinear_steady\noptional continuation/load ramp\nSNES F/J/P callbacks\nconvergence + invariant gate\ncommit internal state"]
+    MODE --> NT["nonlinear_transient\nfor each step: begin/predict\nSNES per step\nvalidate\ncommit or rollback\nadapt dt/fallback or abort"]
+
+    LS --> OUT["Solution outputs"]
+    LT --> OUT
+    NS --> OUT
+    NT --> OUT
+
+    LT --> CKPT
+    NS --> CKPT
+    NT --> CKPT
+
+    LS --> REPORT
+    LT --> REPORT
+    NS --> REPORT
+    NT --> REPORT
+
+    OUT --> POST["Postprocess\nprobes, integrals, derived fields"]
+    POST --> VIZ["VisualizationBundle\nmesh, named fields, tags, derived quantities, time metadata"]
