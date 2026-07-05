@@ -12,6 +12,7 @@ Mode = Literal["linear_steady", "linear_transient", "nonlinear_steady", "nonline
 CellType = Literal["tetrahedron", "hexahedron", "triangle", "quadrilateral", "interval"]
 FieldKind = Literal["scalar", "vector"]
 EntityType = Literal["box", "cylinder"]
+TagNamespace = Literal["materials", "boundaries", "interfaces", "curves", "points"]
 
 
 class StrictModel(BaseModel):
@@ -284,6 +285,41 @@ class DomainIR(StrictModel):
     bcs: tuple[str, ...]
     loads: tuple[str, ...]
     content_hash: str
+
+
+class GeometryEntityIR(StrictModel):
+    name: str
+    type: EntityType
+    dim: int
+    backend_tag: int
+    bounds: tuple[float, float, float, float, float, float]
+
+
+class TagBinding(StrictModel):
+    namespace: TagNamespace
+    name: str
+    dim: int
+    entity_tags: tuple[int, ...]
+    physical_id: int
+    physical_name: str
+
+
+class TagMap(StrictModel):
+    bindings: tuple[TagBinding, ...]
+
+
+class MeshMetadata(StrictModel):
+    backend: Literal["gmsh_occ"]
+    format: Literal["msh4"]
+    path: str
+    dimension: int
+    cell_type: CellType
+    order: int
+    nodes: int
+    elements: int
+    entities: tuple[GeometryEntityIR, ...]
+    tags: TagMap
+    physical_groups: dict[str, int]
 
 
 class RunManifest(StrictModel):

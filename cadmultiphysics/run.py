@@ -10,8 +10,10 @@ from pydantic import ValidationError
 
 from cadmultiphysics.core import build_domain_ir, build_problem_spec, build_run_manifest, build_run_plan
 from cadmultiphysics.diagnostics import Diagnostic, schema_diagnostics
+from cadmultiphysics.errors import MeshError
 from cadmultiphysics.io import load_config, write_json
-from cadmultiphysics.schema import DomainIR, ProblemSpec, RestartState, RunArtifact, RunManifest, RunPlan, RunReport
+from cadmultiphysics.mesh import generate_mesh
+from cadmultiphysics.schema import DomainIR, MeshMetadata, ProblemSpec, RestartState, RunArtifact, RunManifest, RunPlan, RunReport
 
 
 @dataclass(frozen=True)
@@ -22,21 +24,28 @@ class CommandResult:
 
 def mesh(problem: str, out: str) -> CommandResult:
     spec = build_problem_spec(load_config(problem))
-    domain, plan, manifest, artifacts = _problem_artifacts(spec, Path(out), "mesh")
-    diagnostics = (
-        Diagnostic(
-            code="MESH_BACKEND_NOT_IMPLEMENTED",
-            message="Gmsh OCC mesh generation is not implemented.",
-            path=("mesh",),
-            source="mesh",
-        ),
-    )
-    return _finish_problem_command("mesh", spec, domain, plan, manifest, artifacts, diagnostics, Path(out), 2)
+    run_dir = Path(out).resolve()
+    domain, plan, manifest, artifacts = _problem_artifacts(spec, run_dir, "mesh")
+    diagnostics: tuple[Diagnostic, ...] = ()
+    try:
+        build = generate_mesh(spec, run_dir / "mesh")
+        _write_mesh_artifacts(build.metadata, build.artifacts)
+        artifacts.update({name: _artifact(path) for name, path in build.artifacts.items()})
+        manifest = _write_manifest(spec, run_dir, artifacts)
+        artifacts["manifest"] = _artifact(run_dir / "manifest.json")
+        restart_path = run_dir / "restarts" / "restart_0000.json"
+        restart_state = _mesh_restart_state(spec, manifest, artifacts["manifest"].sha256)
+        write_json(restart_path, restart_state.model_dump(mode="json"))
+        artifacts["restart_0000"] = _artifact(restart_path)
+    except MeshError as exc:
+        diagnostics = tuple(exc.diagnostics)
+    return _finish_problem_command("mesh", spec, domain, plan, manifest, artifacts, diagnostics, run_dir, 1 if diagnostics else 0)
 
 
 def solve(problem: str, out: str) -> CommandResult:
     spec = build_problem_spec(load_config(problem))
-    domain, plan, manifest, artifacts = _problem_artifacts(spec, Path(out), "solve")
+    run_dir = Path(out).resolve()
+    domain, plan, manifest, artifacts = _problem_artifacts(spec, run_dir, "solve")
     diagnostics = (
         Diagnostic(
             code="SOLVER_BACKEND_NOT_IMPLEMENTED",
@@ -45,11 +54,11 @@ def solve(problem: str, out: str) -> CommandResult:
             source="solver",
         ),
     )
-    return _finish_problem_command("solve", spec, domain, plan, manifest, artifacts, diagnostics, Path(out), 2)
+    return _finish_problem_command("solve", spec, domain, plan, manifest, artifacts, diagnostics, run_dir, 2)
 
 
 def restart(restart_path: str, out: str) -> CommandResult:
-    run_dir = Path(out)
+    run_dir = Path(out).resolve()
     _ensure_run_dirs(run_dir)
     source = Path(restart_path)
     artifacts: dict[str, RunArtifact] = {}
@@ -98,13 +107,37 @@ def _problem_artifacts(
         files["solver_profile"] = run_dir / "logs" / "solver_profile.json"
         write_json(files["solver_profile"], spec.solver.model_dump(mode="json"))
     artifacts = {name: _artifact(path) for name, path in files.items()}
-    manifest = build_run_manifest(spec, str(run_dir)).model_copy(
-        update={"artifact_hashes": {name: artifact.sha256 for name, artifact in artifacts.items()}}
-    )
-    manifest_path = run_dir / "manifest.json"
-    write_json(manifest_path, manifest.model_dump(mode="json"))
-    artifacts["manifest"] = _artifact(manifest_path)
+    manifest = _write_manifest(spec, run_dir, artifacts)
+    artifacts["manifest"] = _artifact(run_dir / "manifest.json")
     return domain, plan, manifest, artifacts
+
+
+def _write_manifest(spec: ProblemSpec, run_dir: Path, artifacts: dict[str, RunArtifact]) -> RunManifest:
+    manifest = build_run_manifest(spec, str(run_dir)).model_copy(
+        update={"artifact_hashes": {name: artifact.sha256 for name, artifact in artifacts.items() if name != "manifest" and not name.startswith("restart_")}}
+    )
+    write_json(run_dir / "manifest.json", manifest.model_dump(mode="json"))
+    return manifest
+
+
+def _write_mesh_artifacts(metadata: MeshMetadata, artifacts: dict[str, Path]) -> None:
+    write_json(artifacts["mesh_metadata"], metadata.model_dump(mode="json"))
+    write_json(artifacts["tag_map"], metadata.tags.model_dump(mode="json"))
+    write_json(artifacts["geometry_ir"], [entity.model_dump(mode="json") for entity in metadata.entities])
+
+
+def _mesh_restart_state(spec: ProblemSpec, manifest: RunManifest, manifest_hash: str) -> RestartState:
+    return RestartState(
+        schema_version=spec.version,
+        content_hash=spec.content_hash,
+        manifest_path=manifest.output_paths["manifest"],
+        manifest_hash=manifest_hash,
+        mode=spec.mode,
+        fields=tuple(field.name for field in spec.fields),
+        step_index=0,
+        time=spec.time.start if spec.time else None,
+        artifacts={"mesh": manifest.output_paths["mesh"]},
+    )
 
 
 def _finish_problem_command(
