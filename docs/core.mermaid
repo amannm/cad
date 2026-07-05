@@ -10,7 +10,7 @@ flowchart LR
     subgraph IR[Domain IR]
         DOMAIN["DomainIR\ngeometry intent, fields, materials,\nBCs, loads, interfaces"]
         MODE["ModeContract\nlinear steady | linear transient\nnonlinear steady | nonlinear transient"]
-        MANIFEST["RunManifest\ninput hashes, versions, paths\nreproducibility metadata"]
+        MANIFEST["RunManifest\ninput hashes, paths\nreproducibility metadata"]
     end
 
     subgraph GeoMesh[Geometry, tags, mesh]
@@ -48,7 +48,7 @@ flowchart LR
         POST["Postprocess\nderived fields, projections,\nprobes, global integrals"]
         WRITERS["Writers\nprimary: ADIOS2/VTX .bp\nlimited/debug: XDMF/HDF5\nreports: CSV/JSON"]
         RESTART["RestartState\nmesh ids, solution/history,\nmaterial state, manifest hash"]
-        REPORT["RunReport\nmode, status, diagnostics,\nartifacts, versions"]
+        REPORT["RunReport\nmode, status, diagnostics,\nartifacts"]
     end
 
     subgraph Gates[Transition validation]

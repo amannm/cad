@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import importlib.metadata
 import json
-import platform
 import sys
 from typing import Any
 
@@ -42,7 +40,6 @@ def _parser() -> argparse.ArgumentParser:
     inspect.add_argument("--json", action="store_true")
     inspect.set_defaults(func=_inspect)
     version = subparsers.add_parser("version")
-    version.add_argument("--full", action="store_true")
     version.set_defaults(func=_version)
     for name in ("mesh", "solve"):
         command = subparsers.add_parser(name)
@@ -136,33 +133,7 @@ def _restart(args: argparse.Namespace) -> int:
 
 
 def _version(args: argparse.Namespace) -> int:
-    if not args.full:
-        print(__version__)
-        return 0
-    _print_json(
-        {
-            "cadmultiphysics": __version__,
-            "python": platform.python_version(),
-            "packages": {
-                name: _package_version(name)
-                for name in (
-                    "pydantic",
-                    "pint",
-                    "PyYAML",
-                    "gmsh",
-                    "fenics-dolfinx",
-                    "fenics-basix",
-                    "fenics-ffcx",
-                    "fenics-ufl",
-                    "mpi4py",
-                    "mpich",
-                    "petsc",
-                    "petsc4py",
-                    "adios2",
-                )
-            },
-        }
-    )
+    print(__version__)
     return 0
 
 
@@ -194,10 +165,3 @@ def _fail(diagnostics: list[Diagnostic], json_mode: bool, exit_code: int = 1) ->
 def _print_json(payload: Any) -> None:
     json.dump(payload, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
-
-
-def _package_version(name: str) -> str | None:
-    try:
-        return importlib.metadata.version(name)
-    except importlib.metadata.PackageNotFoundError:
-        return None

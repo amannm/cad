@@ -7,6 +7,15 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
+import numpy as np
+import ufl
+from dolfinx import fem
+from dolfinx.fem.petsc import LinearProblem
+from dolfinx.io import VTXWriter
+from dolfinx.io import gmsh as gmshio
+from mpi4py import MPI
+from petsc4py import PETSc
+
 from cadmultiphysics.diagnostics import Diagnostic
 from cadmultiphysics.io import write_json
 from cadmultiphysics.schema import AcceptanceCheck, MeshMetadata, ProblemSpec, RunPlan, SolutionState, StepRecord, TagBinding
@@ -184,16 +193,6 @@ def _solve_linear_scalar(
     field_name: str,
     material_terms: tuple[tuple[float, int], ...],
 ) -> StepSolve:
-    from mpi4py import MPI
-    from petsc4py import PETSc
-
-    import numpy as np
-    import ufl
-    from dolfinx import fem
-    from dolfinx.fem.petsc import LinearProblem
-    from dolfinx.io import VTXWriter
-    from dolfinx.io import gmsh as gmshio
-
     mesh_data = gmshio.read_from_msh(mesh.path, MPI.COMM_WORLD, rank=0, gdim=mesh.dimension)
     domain = mesh_data.mesh
     cell_tags = mesh_data.cell_tags

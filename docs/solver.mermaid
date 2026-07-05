@@ -35,7 +35,7 @@ flowchart TD
     subgraph Out[Step outputs]
         POST["Postprocess\nprobes, integrals, derived fields"]
         WRITE["Write artifacts\nADIOS2/VTX .bp primary\nXDMF/HDF5 limited/debug\nCSV/JSON reports"]
-        REPORT["RunReport\nstatus, iterations, timings, versions"]
+        REPORT["RunReport\nstatus, iterations, timings"]
     end
 
     RUN --> MODE

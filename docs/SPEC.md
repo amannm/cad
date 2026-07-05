@@ -32,7 +32,7 @@ The system supports four first-class simulation modes:
 3. Nonlinear steady
 4. Nonlinear transient
 
-A run is deterministic, fail-closed, and reproducible. Failed steps must not mutate committed state. Every run emits a manifest, diagnostics, version information, solver reasons, and references to output artifacts.
+A run is deterministic, fail-closed, and reproducible. Failed steps must not mutate committed state. Every run emits a manifest, diagnostics, solver reasons, and references to output artifacts.
 
 ---
 
@@ -284,7 +284,7 @@ cadmp mesh problem.yml --out run/mesh
 cadmp solve problem.yml --out run/result
 cadmp restart run/result/restart.json --out run/restart_001
 cadmp inspect run/result/report.json
-cadmp version --full
+cadmp version
 ```
 
 Required CLI behavior:
@@ -451,7 +451,6 @@ Required contents:
 - schema version;
 - content hash of canonical `ProblemSpec`;
 - hashes of generated intermediate files;
-- Python/package/backend versions;
 - PETSc scalar type and precision;
 - MPI size and partition metadata;
 - mesh generation options;
@@ -703,8 +702,7 @@ Forms are cached by a content key that includes:
 - scalar dtype;
 - form compiler options;
 - entity maps;
-- coefficient layout;
-- package versions.
+- coefficient layout.
 
 The cache must be invalidated when any of these inputs changes.
 
@@ -863,7 +861,6 @@ Restart artifacts must include:
 - history values;
 - material state;
 - time/load index;
-- physics package versions;
 - restart schema version.
 
 Restart load must fail if:
@@ -871,7 +868,6 @@ Restart load must fail if:
 - manifest hash mismatches, unless user explicitly allows compatible restart;
 - mesh identity mismatches;
 - field layout mismatches;
-- physics package version is incompatible;
 - state variables are missing.
 
 ---
@@ -932,8 +928,7 @@ XDMF/HDF5 may be supported for debugging and compatibility, but should be docume
 - timings;
 - invariants;
 - output artifact paths;
-- warnings;
-- environment versions.
+- warnings.
 
 ---
 
@@ -1097,12 +1092,6 @@ cadmp migrate old.yml --from 0.1 --to 0.2 > new.yml
 
 Migrations must preserve semantic meaning or emit warnings when manual intervention is required.
 
-### 21.3 Backend versions
-
-The manifest records backend versions. The project should define a tested compatibility matrix in release notes.
-
----
-
 ## 22. Initial Physics Packages
 
 ### 22.1 Poisson / scalar diffusion
@@ -1168,7 +1157,7 @@ The MVP is complete when all of the following are true:
 8. A transient heat problem advances at least ten steps with restart output.
 9. Failed solver convergence leaves committed state unchanged.
 10. VTX/ADIOS2 output is written and can be opened in ParaView.
-11. `report.json` includes status, solver reasons, timings, versions, and artifact paths.
+11. `report.json` includes status, solver reasons, timings, and artifact paths.
 12. CI runs unit and integration tests in serial mode.
 
 ---
@@ -1285,7 +1274,7 @@ flowchart LR
     subgraph IR[Domain IR]
         DOMAIN["DomainIR\ngeometry intent, fields, materials,\nBCs, loads, interfaces"]
         MODE["ModeContract\nlinear steady | linear transient\nnonlinear steady | nonlinear transient"]
-        MANIFEST["RunManifest\ninput hashes, versions, paths\nreproducibility metadata"]
+        MANIFEST["RunManifest\ninput hashes, paths\nreproducibility metadata"]
     end
 
     subgraph GeoMesh[Geometry, tags, mesh]
@@ -1323,7 +1312,7 @@ flowchart LR
         POST["Postprocess\nderived fields, projections,\nprobes, global integrals"]
         WRITERS["Writers\nprimary: ADIOS2/VTX .bp\nlimited/debug: XDMF/HDF5\nreports: CSV/JSON"]
         RESTART["RestartState\nmesh ids, solution/history,\nmaterial state, manifest hash"]
-        REPORT["RunReport\nmode, status, diagnostics,\nartifacts, versions"]
+        REPORT["RunReport\nmode, status, diagnostics,\nartifacts"]
     end
 ```
 

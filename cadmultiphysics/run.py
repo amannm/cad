@@ -5,7 +5,7 @@ import json
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import ValidationError
 
@@ -16,7 +16,6 @@ from cadmultiphysics.errors import DiscretizationError, MeshError, OutputError
 from cadmultiphysics.io import load_config, write_diagnostics_csv, write_json
 from cadmultiphysics.mesh import generate_mesh
 from cadmultiphysics.schema import DiscretePlan, DomainIR, MeshMetadata, ProblemSpec, RestartState, RunArtifact, RunManifest, RunPlan, RunReport, SolutionState, StepRecord
-from cadmultiphysics.solver import execute_solve
 from cadmultiphysics.units import QuantitySpec
 
 
@@ -59,6 +58,8 @@ def solve(problem: str, out: str, overwrite: bool = False) -> CommandResult:
 
 
 def solve_spec(spec: ProblemSpec, out: str, overwrite: bool = False) -> CommandResult:
+    from cadmultiphysics.solver import execute_solve
+
     run_dir = Path(out).resolve()
     _prepare_run_dir(run_dir, overwrite)
     domain, plan, manifest, artifacts = _problem_artifacts(spec, run_dir, "solve")
@@ -236,8 +237,6 @@ def _finish_problem_command(
         run_plan=plan,
         manifest=manifest.output_paths["manifest"],
         manifest_hash=artifacts["manifest"].sha256,
-        backend_versions=manifest.backend_versions,
-        mpi_size=manifest.mpi_size,
         artifacts=artifacts,
         state=state,
         steps=steps,
@@ -547,7 +546,21 @@ def _artifact(path: Path) -> RunArtifact:
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
+    if path.is_dir():
+        for item in sorted(path.rglob("*"), key=lambda value: value.relative_to(path).as_posix()):
+            relative = item.relative_to(path).as_posix().encode()
+            digest.update(b"d" if item.is_dir() else b"f")
+            digest.update(b"\0")
+            digest.update(relative)
+            digest.update(b"\0")
+            if item.is_file():
+                _update_digest(digest, item)
+        return digest.hexdigest()
+    _update_digest(digest, path)
+    return digest.hexdigest()
+
+
+def _update_digest(digest: Any, path: Path) -> None:
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
-    return digest.hexdigest()

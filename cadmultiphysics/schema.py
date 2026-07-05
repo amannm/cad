@@ -409,9 +409,6 @@ class DiscretePlan(StrictModel):
 class RunManifest(StrictModel):
     schema_version: str
     content_hash: str
-    backend_versions: dict[str, str | None]
-    python_version: str
-    mpi_size: int
     mesh_options: dict[str, Any]
     solver_options: dict[str, Any]
     output_paths: dict[str, str]
@@ -507,8 +504,6 @@ class RunReport(StrictModel):
     run_plan: RunPlan | None = None
     manifest: str | None = None
     manifest_hash: str | None = None
-    backend_versions: dict[str, str | None] = Field(default_factory=dict)
-    mpi_size: int | None = None
     artifacts: dict[str, RunArtifact] = Field(default_factory=dict)
     state: SolutionState | None = None
     steps: tuple[StepRecord, ...] = ()

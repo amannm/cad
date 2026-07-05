@@ -6,21 +6,20 @@ resolution-markers = [
     "python_full_version < '3.12'",
 ]
 
-[[package]]
-name = "adios2"
-version = "2.12.1.1001"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+[options]
+prerelease-mode = "allow"
+
+[manifest]
+constraints = [
+    { name = "fenics-basix", directory = "reference/basix" },
+    { name = "fenics-ffcx", directory = "reference/ffcx" },
+    { name = "fenics-ufl", directory = "reference/ufl" },
+    { name = "petsc4py", specifier = "==3.24.6" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/58/d9/254e366559bf9a3f7cb21fb4e516852d5b89466ea5f7864005765404ed33/adios2-2.12.1.1001.tar.gz", hash = "sha256:f3bf3a6e64b800351a091d4fc70cc8437041c36c81f90f01697b81f168b6adb0", size = 9310634, upload-time = "2026-04-29T01:44:58.875Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3a/06/4b84a84c15ce6f8467800967d65d5cb908fd2e9a2c608e82081863a9b9e5/adios2-2.12.1.1001-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:359381be4d06032f5c73b10d055b8bd2ed1eb6f44f089d540dcd5058942e3694", size = 16890985, upload-time = "2026-04-29T01:44:46.368Z" },
-    { url = "https://files.pythonhosted.org/packages/9e/97/067247ca4fe828dfaf9cefde5b4538b1ea80110606492454f34230f33b1e/adios2-2.12.1.1001-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:1026cb89db10518cbb35690f5f72e9f7fa30e7546511bd998e33401664c2b675", size = 16886878, upload-time = "2026-04-29T01:44:48.943Z" },
-    { url = "https://files.pythonhosted.org/packages/3c/b0/591adea38533d2db6a246e7d5dcb23f21eed3b37841766f60db1fd3ff161/adios2-2.12.1.1001-cp313-cp313t-manylinux_2_28_x86_64.whl", hash = "sha256:075bc2d3cb17c93028a731d3f4243b59b7afd9bd2ee7ef34ff7cd848c844b944", size = 16891301, upload-time = "2026-04-29T01:44:51.463Z" },
-    { url = "https://files.pythonhosted.org/packages/0d/59/97217b19f49d2ea3c26285e270332f08409be06211a9ef9125ad4891f2c9/adios2-2.12.1.1001-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:303ef39d33f29587905056301746c965c04b2e69154912db8fd0523869a02dc1", size = 16895153, upload-time = "2026-04-29T01:44:54.151Z" },
-]
+
+[[manifest.dependency-metadata]]
+name = "petsc4py"
+version = "3.24.6"
 
 [[package]]
 name = "annotated-types"
@@ -36,15 +35,8 @@ name = "cadmultiphysics"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "adios2" },
-    { name = "fenics-basix" },
-    { name = "fenics-ffcx" },
-    { name = "fenics-ufl" },
+    { name = "fenics-dolfinx", extra = ["petsc4py"] },
     { name = "gmsh" },
-    { name = "mpi4py" },
-    { name = "mpich" },
-    { name = "petsc" },
-    { name = "petsc4py" },
     { name = "pint" },
     { name = "pydantic" },
     { name = "pyyaml" },
@@ -52,15 +44,8 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "adios2", specifier = ">=2.10,<3" },
-    { name = "fenics-basix", specifier = ">=0.11" },
-    { name = "fenics-ffcx", specifier = ">=0.11" },
-    { name = "fenics-ufl", specifier = ">=2026.1" },
+    { name = "fenics-dolfinx", extras = ["petsc4py"], directory = "reference/dolfinx/python" },
     { name = "gmsh", specifier = ">=4.13,<5" },
-    { name = "mpi4py", specifier = ">=4,<5" },
-    { name = "mpich", specifier = ">=4,<5" },
-    { name = "petsc", specifier = ">=3.23,<4" },
-    { name = "petsc4py", specifier = ">=3.23,<4" },
     { name = "pint", specifier = ">=0.24,<1" },
     { name = "pydantic", specifier = ">=2.7,<3" },
     { name = "pyyaml", specifier = ">=6.0,<7" },
@@ -138,32 +123,113 @@ wheels = [
 
 [[package]]
 name = "fenics-basix"
-version = "0.11.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.12.0.dev0"
+source = { directory = "reference/basix" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4c/fd/dd105d029226ad7a1ca23aa05c2a95c327586df89d555d260445aca1a3f5/fenics_basix-0.11.0.tar.gz", hash = "sha256:9aac7f4e667d454383b7551c6aa88685b55d5e7519ac046401fc27d19010e95e", size = 639667, upload-time = "2026-06-09T19:51:27.271Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f2/40/3714022ff4de3ef844854ef8af5d3cf7a6e771cf51f0a33d8156757622ac/fenics_basix-0.11.0-cp311-cp311-macosx_10_14_x86_64.whl", hash = "sha256:2d8796f89a75c78fcfa14a71dae3da468bd8a0536a7561585f61dbe4a8f33c60", size = 956148, upload-time = "2026-06-09T19:51:01.164Z" },
-    { url = "https://files.pythonhosted.org/packages/3c/2e/873e0d3f53ed2c676766ee61a8152e34f02cd580739508e0732d794701b3/fenics_basix-0.11.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:a1d5d6eb920476154a89941054168252f39e104eee3f7ee6ab2378a3ccb64eac", size = 836293, upload-time = "2026-06-09T19:51:03.064Z" },
-    { url = "https://files.pythonhosted.org/packages/1a/d4/a213bbe098a5391b98effec5cd84b5c7b4a22290d1edb4d907479744700c/fenics_basix-0.11.0-cp311-cp311-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:6502baf09b8e1b81e8846834c1ccc63441b1312412c6f63eed5a17ba2673070f", size = 5970355, upload-time = "2026-06-09T19:51:04.928Z" },
-    { url = "https://files.pythonhosted.org/packages/5a/da/528f0095bdb5312b3bd611f30f0a5a8ba19029d6ddb865e3d15b5504b300/fenics_basix-0.11.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3e00780a5df0c47fc819566051327c83537883695a307828318ec5be43a4af07", size = 13052678, upload-time = "2026-06-09T19:51:07.587Z" },
-    { url = "https://files.pythonhosted.org/packages/2c/47/820d9c35f206c86ed99232d20df8f62c0953c7632468444f076ceba76995/fenics_basix-0.11.0-cp311-cp311-win_amd64.whl", hash = "sha256:98722a94cca265cbee4b3d328a7dc56fc31bbea522195ac469ef818fc07bd88e", size = 6393109, upload-time = "2026-06-09T19:51:09.965Z" },
-    { url = "https://files.pythonhosted.org/packages/f4/4e/6c7d1eef8b786e743821af1e38de67adc5099225e5550f9ce8fc9def7fc0/fenics_basix-0.11.0-cp311-cp311-win_arm64.whl", hash = "sha256:989490e60f1654dc97919b0bc0bd48072b877d2b1cefd456668b964aa9dbb951", size = 1727448, upload-time = "2026-06-09T19:51:11.758Z" },
-    { url = "https://files.pythonhosted.org/packages/da/80/5948444b3590bc87fbabb107aad9e45bfe750fcfc1a1a1bd6d196fde76ce/fenics_basix-0.11.0-cp312-abi3-macosx_10_14_x86_64.whl", hash = "sha256:ab6160c259f9c4904d3770a2d0ee0981873bb30bc0350a29299c370044f2d6a4", size = 954729, upload-time = "2026-06-09T19:51:13.243Z" },
-    { url = "https://files.pythonhosted.org/packages/3c/91/949e0a5d1835726c4824a35ff9a1a9f1dcea2cacf9983504aeeb4375d354/fenics_basix-0.11.0-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:0dcf03c2c04a7e1141aea57ef07a182b7261a87b92593b9377c4344734704312", size = 835290, upload-time = "2026-06-09T19:51:14.895Z" },
-    { url = "https://files.pythonhosted.org/packages/98/2d/0e8419f020612f0bb7479de9bc2ff9184ed0aebfbecd2b150da8838900e4/fenics_basix-0.11.0-cp312-abi3-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b8c8b2032652c01c53aa88f8289f88708e7f87f9a26319926415ac2eb93229c1", size = 5966464, upload-time = "2026-06-09T19:51:16.556Z" },
-    { url = "https://files.pythonhosted.org/packages/f0/38/8b31e6b0490edd2f2343f23ec431502c0113d512c12ffe479344b2377794/fenics_basix-0.11.0-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:fe1e1168f4b40b0c673e80d9063b844e7a779cb9b1cb74d195be0e696e59200a", size = 13047946, upload-time = "2026-06-09T19:51:18.608Z" },
-    { url = "https://files.pythonhosted.org/packages/bd/c8/858ff2516fe77dc6f5ff8da1765f7d64d8c53b33a177a1736bf0bd62113a/fenics_basix-0.11.0-cp312-abi3-win_amd64.whl", hash = "sha256:093cc7a4fb19b5597a2dc629f4cdefb2cc20ba9a693835c5384cd3df1f114b9d", size = 6390891, upload-time = "2026-06-09T19:51:23.075Z" },
-    { url = "https://files.pythonhosted.org/packages/ba/12/69cef528bfadc805f0733690a11b34e0f07deebcef5c553948a98c6b22a3/fenics_basix-0.11.0-cp312-abi3-win_arm64.whl", hash = "sha256:d4c043d6d70964c6ad67a8ef82e0281084e2475e156d05692d890593786e523c", size = 1725182, upload-time = "2026-06-09T19:51:25.117Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "fenics-basix", extras = ["docs", "lint", "test", "optional"], marker = "extra == 'ci'" },
+    { name = "fenics-basix", extras = ["optional"], marker = "extra == 'test'" },
+    { name = "fenics-ufl", marker = "extra == 'optional'", git = "https://github.com/fenics/ufl" },
+    { name = "fenics-ufl", marker = "extra == 'test-no-numba'", git = "https://github.com/fenics/ufl" },
+    { name = "gersemi", marker = "extra == 'lint'" },
+    { name = "markdown", marker = "extra == 'docs'" },
+    { name = "matplotlib", marker = "extra == 'test'" },
+    { name = "matplotlib", marker = "extra == 'test-no-numba'" },
+    { name = "mypy", marker = "extra == 'ci'" },
+    { name = "numba", marker = "extra == 'optional'" },
+    { name = "numpy", specifier = ">=2" },
+    { name = "pydata-sphinx-theme", marker = "extra == 'docs'" },
+    { name = "pylit3", marker = "extra == 'docs'" },
+    { name = "pytest", marker = "extra == 'test'" },
+    { name = "pytest", marker = "extra == 'test-no-numba'" },
+    { name = "pytest-xdist", marker = "extra == 'ci'" },
+    { name = "pyyaml", marker = "extra == 'docs'" },
+    { name = "ruff", marker = "extra == 'lint'" },
+    { name = "scipy", marker = "extra == 'test'" },
+    { name = "scipy", marker = "extra == 'test-no-numba'" },
+    { name = "sphinx", marker = "extra == 'docs'" },
+    { name = "sympy", marker = "extra == 'test'" },
+    { name = "sympy", marker = "extra == 'test-no-numba'" },
 ]
+provides-extras = ["docs", "lint", "optional", "test", "test-no-numba", "ci"]
+
+[[package]]
+name = "fenics-dolfinx"
+version = "0.12.0.dev0"
+source = { directory = "reference/dolfinx/python" }
+dependencies = [
+    { name = "cffi" },
+    { name = "fenics-basix" },
+    { name = "fenics-ffcx" },
+    { name = "fenics-ufl" },
+    { name = "mpi4py" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+
+[package.optional-dependencies]
+petsc4py = [
+    { name = "petsc4py" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "breathe", marker = "extra == 'docs'" },
+    { name = "cffi" },
+    { name = "fenics-basix", specifier = ">=0.12.0.dev0" },
+    { name = "fenics-dolfinx", extras = ["build"], marker = "extra == 'ci'" },
+    { name = "fenics-dolfinx", extras = ["demo"], marker = "extra == 'docs'" },
+    { name = "fenics-dolfinx", extras = ["docs"], marker = "extra == 'ci'" },
+    { name = "fenics-dolfinx", extras = ["lint"], marker = "extra == 'ci'" },
+    { name = "fenics-dolfinx", extras = ["mypy"], marker = "extra == 'ci'" },
+    { name = "fenics-dolfinx", extras = ["optional"], marker = "extra == 'ci'" },
+    { name = "fenics-dolfinx", extras = ["optional"], marker = "extra == 'test'" },
+    { name = "fenics-dolfinx", extras = ["test"], marker = "extra == 'ci'" },
+    { name = "fenics-ffcx", specifier = ">=0.12.0.dev0" },
+    { name = "fenics-ufl", specifier = ">=2026.2.0.dev0" },
+    { name = "gersemi", marker = "extra == 'lint'" },
+    { name = "gmsh", marker = "extra == 'demo'" },
+    { name = "jupytext", marker = "extra == 'docs'" },
+    { name = "markdown", marker = "extra == 'docs'" },
+    { name = "matplotlib", marker = "extra == 'demo'" },
+    { name = "matplotlib", marker = "extra == 'test'" },
+    { name = "mpi4py" },
+    { name = "mypy", marker = "extra == 'mypy'" },
+    { name = "myst-parser", marker = "extra == 'docs'" },
+    { name = "networkx", marker = "extra == 'demo'" },
+    { name = "networkx", marker = "extra == 'test'" },
+    { name = "numba", marker = "extra == 'demo'" },
+    { name = "numba", marker = "extra == 'optional'" },
+    { name = "numpy", specifier = ">=2" },
+    { name = "packaging", marker = "extra == 'docs'" },
+    { name = "packaging", marker = "extra == 'test'" },
+    { name = "petsc4py", marker = "extra == 'petsc4py'" },
+    { name = "pydata-sphinx-theme", marker = "extra == 'docs'" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=9.0.0" },
+    { name = "pytest-xdist", marker = "extra == 'ci'" },
+    { name = "pyvista", marker = "extra == 'demo'" },
+    { name = "pyyaml", marker = "extra == 'docs'" },
+    { name = "ruff", marker = "extra == 'lint'" },
+    { name = "scipy", marker = "extra == 'demo'" },
+    { name = "scipy", marker = "extra == 'test'" },
+    { name = "scipy-stubs", marker = "extra == 'mypy'" },
+    { name = "sphinx", marker = "extra == 'docs'" },
+    { name = "sphinx-codeautolink", extras = ["ipython"], marker = "extra == 'docs'" },
+    { name = "sphinxcontrib-bibtex", marker = "extra == 'docs'" },
+    { name = "types-cffi", marker = "extra == 'mypy'" },
+    { name = "types-setuptools", marker = "extra == 'mypy'" },
+]
+provides-extras = ["demo", "docs", "lint", "mypy", "optional", "petsc4py", "test", "ci"]
 
 [[package]]
 name = "fenics-ffcx"
-version = "0.11.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.12.0.dev0"
+source = { directory = "reference/ffcx" }
 dependencies = [
     { name = "cffi" },
     { name = "fenics-basix" },
@@ -172,23 +238,63 @@ dependencies = [
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "setuptools" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/00/41/05549c150e558de0b7ed04c99ed69c4ac4916077f560c040310919a8a462/fenics_ffcx-0.11.0.tar.gz", hash = "sha256:aedc6a6b7131b87adc2eb76622d6da94610f0ee92156859333e2d4a75a83bab8", size = 150746, upload-time = "2026-06-09T20:22:21.931Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/30/71/3d8e92277ba21605030a8ac6c9ccec138246e022f079bb5a27905fdb39aa/fenics_ffcx-0.11.0-py3-none-any.whl", hash = "sha256:0f7420bb69ba0f734451b6330b913e3f4cb18bde2cb93b414df0459cfb919c9d", size = 137441, upload-time = "2026-06-09T20:22:20.642Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "cffi" },
+    { name = "coverage", marker = "extra == 'ci'", specifier = ">=7.0.0" },
+    { name = "coveralls", marker = "extra == 'ci'" },
+    { name = "fenics-basix", specifier = ">=0.12.0.dev0" },
+    { name = "fenics-ffcx", extras = ["docs"], marker = "extra == 'ci'" },
+    { name = "fenics-ffcx", extras = ["lint"], marker = "extra == 'ci'" },
+    { name = "fenics-ffcx", extras = ["test"], marker = "extra == 'ci'" },
+    { name = "fenics-ufl", specifier = ">=2026.2.0.dev0" },
+    { name = "mypy", marker = "extra == 'ci'" },
+    { name = "numba", marker = "extra == 'optional'" },
+    { name = "numba", marker = "extra == 'test'" },
+    { name = "numpy", specifier = ">=1.21" },
+    { name = "pydata-sphinx-theme", marker = "extra == 'docs'" },
+    { name = "pygraphviz", marker = "extra == 'optional'", specifier = "==1.9" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=6.0" },
+    { name = "pytest-cov", marker = "extra == 'ci'" },
+    { name = "pytest-xdist", marker = "extra == 'ci'" },
+    { name = "ruff", marker = "extra == 'lint'" },
+    { name = "setuptools", specifier = ">=77.0.3" },
+    { name = "sphinx", marker = "extra == 'docs'" },
+    { name = "sympy", marker = "extra == 'test'" },
+    { name = "types-setuptools", marker = "extra == 'ci'" },
 ]
+provides-extras = ["lint", "docs", "optional", "test", "ci"]
 
 [[package]]
 name = "fenics-ufl"
-version = "2026.1.0"
-source = { registry = "https://pypi.org/simple" }
+version = "2026.2.0.dev0"
+source = { directory = "reference/ufl" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a6/47/343585815bd6dec982490912805395d62b3859b3567db15b8c80ec8b4e44/fenics_ufl-2026.1.0.tar.gz", hash = "sha256:c83be6dcd4301f7e27b70cda076ada36e0bedabb9338d87a38fce44f3ab0f9ce", size = 333502, upload-time = "2026-06-09T16:36:07.231Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5c/03/51a8302a098281b219c93ce7e50b4491c10094570383b7b39925d32dcacb/fenics_ufl-2026.1.0-py3-none-any.whl", hash = "sha256:91dfbe9aa9365b3953a6315d7ea0832b0e20a357ae0ec86875530c94c46e8958", size = 265345, upload-time = "2026-06-09T16:36:05.797Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "coverage", marker = "extra == 'ci'" },
+    { name = "coveralls", marker = "extra == 'ci'" },
+    { name = "fenics-ufl", extras = ["docs"], marker = "extra == 'ci'" },
+    { name = "fenics-ufl", extras = ["lint"], marker = "extra == 'ci'" },
+    { name = "fenics-ufl", extras = ["test"], marker = "extra == 'ci'" },
+    { name = "fenics-ufl", extras = ["typing"], marker = "extra == 'ci'" },
+    { name = "mypy", marker = "extra == 'lint'" },
+    { name = "numpy" },
+    { name = "pydata-sphinx-theme", marker = "extra == 'docs'" },
+    { name = "pytest", marker = "extra == 'test'" },
+    { name = "pytest-cov", marker = "extra == 'ci'" },
+    { name = "pytest-xdist", marker = "extra == 'ci'" },
+    { name = "ruff", marker = "extra == 'lint'" },
+    { name = "sphinx", marker = "extra == 'docs'" },
+    { name = "sphinx-codeautolink", extras = ["ipython"], marker = "extra == 'docs'" },
+    { name = "types-colorama", marker = "extra == 'typing'" },
 ]
+provides-extras = ["lint", "typing", "docs", "test", "ci"]
 
 [[package]]
 name = "flexcache"
@@ -266,17 +372,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/39/29/45a41d081342896af52d38a848017728bf6834c4c92814c50aa791dc750b/mpi4py-4.1.2-cp314-cp314t-manylinux1_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:db189238c37be98933eeb078a3e2b827eef969837e8fe0f3a2e6cdb7f4b1b05f", size = 1423092, upload-time = "2026-05-16T10:35:01.672Z" },
     { url = "https://files.pythonhosted.org/packages/0f/6f/c2127d426d87f2f7cdb4beacbb4febe7b0c93047a3c615d0e56cecb42563/mpi4py-4.1.2-cp314-cp314t-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:d0fbf0bc100ed966c3d7f44231a19aef0025d523d1b813de468a1b114d0d9436", size = 1303134, upload-time = "2026-05-16T10:35:03.122Z" },
     { url = "https://files.pythonhosted.org/packages/24/9c/f80cd1f9591be4c5c55a60676306b19847194cf168e0cc9db07f2e181152/mpi4py-4.1.2-cp314-cp314t-win_amd64.whl", hash = "sha256:34d94bd254947d17033aa5a9b6b1872175bad7e73ccef6b0373f2b8054e30f2e", size = 1838114, upload-time = "2026-05-16T10:35:05.306Z" },
-]
-
-[[package]]
-name = "mpich"
-version = "4.3.2"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a9/65/845251e32ef01919f795ef064a72e884cb05222775550f90d5df517f00f8/mpich-4.3.2-py3-none-macosx_11_0_arm64.whl", hash = "sha256:a48e0414f078c35bda2ab14da5969677ae63491bec377b2290f6996fb322e08b", size = 5552585, upload-time = "2025-10-06T19:07:20.169Z" },
-    { url = "https://files.pythonhosted.org/packages/eb/22/ee6ab2303f590389b1675354fa80cd56a4d4d2a6cbfe3e6fc4fecf3a8370/mpich-4.3.2-py3-none-macosx_11_0_x86_64.whl", hash = "sha256:91d3e9b29cada04ffeb4077cd66a905339377a72b5530907f2d4d781579f0f67", size = 7915918, upload-time = "2025-10-06T19:07:21.914Z" },
-    { url = "https://files.pythonhosted.org/packages/f5/bb/aa95f82c6f2212503ff8cf64aa1667362438939863666a42834e13540780/mpich-4.3.2-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:8acc76f06ad609515a312ac4c5696cd0d4b668e4a5c3b802755da91e05861b72", size = 6801745, upload-time = "2025-10-06T19:07:23.444Z" },
-    { url = "https://files.pythonhosted.org/packages/dd/8f/39928760a15e4af007f8d1db3d5241a8b3dad53b0a32ee016acb994b58c3/mpich-4.3.2-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:afb503104df7e3ba828d86e78f54427ef410e9fc4a2da113de529fc851128ed4", size = 8384069, upload-time = "2025-10-06T19:07:25.52Z" },
 ]
 
 [[package]]
@@ -416,21 +511,10 @@ wheels = [
 ]
 
 [[package]]
-name = "petsc"
-version = "3.25.3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/9b/4a/b818e472baa66435a7c36eb0a96a8da30d1808f6530f044b4ca71fec18c8/petsc-3.25.3.tar.gz", hash = "sha256:95ce60df2c7f9c5044d6a544c41e996a512557f91df1a60bdb690b332904ebb5", size = 16691232, upload-time = "2026-06-29T22:35:10.625Z" }
-
-[[package]]
 name = "petsc4py"
-version = "3.25.3"
+version = "3.24.6"
 source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "petsc" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/0f/b4/fdf09086575f91e0adbe4928ae086fca217c32119fb5e84c97012e1f09eb/petsc4py-3.25.3.tar.gz", hash = "sha256:4bed8d503e223e1be2ec8c298dfbe7d8262c41c2e95d920ce756a57979bb9963", size = 486817, upload-time = "2026-06-29T22:35:13.155Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cd/51/1baccc4b72af9c993927a5348ebb659aef9a9d10d7531d436f91be23074f/petsc4py-3.24.6.tar.gz", hash = "sha256:1b9594c9aabcd76eaf6092086d8b3f0f2e6c71e3c6088b41dde40fdaf776812a", size = 452915, upload-time = "2026-03-29T19:25:52.347Z" }
 
 [[package]]
 name = "pint"

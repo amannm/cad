@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.metadata
 import json
 import math
-import os
-import platform
 from typing import Any
 
 from pydantic import ValidationError
@@ -108,23 +105,6 @@ def build_run_manifest(spec: ProblemSpec, run_dir: str) -> RunManifest:
     return RunManifest(
         schema_version=spec.version,
         content_hash=spec.content_hash,
-        backend_versions={
-            "cadmultiphysics": _version("cadmultiphysics"),
-            "pydantic": _version("pydantic"),
-            "pint": _version("pint"),
-            "gmsh": _version("gmsh"),
-            "dolfinx": _version("fenics-dolfinx"),
-            "basix": _version("fenics-basix"),
-            "ffcx": _version("fenics-ffcx"),
-            "ufl": _version("fenics-ufl"),
-            "mpi4py": _version("mpi4py"),
-            "mpich": _version("mpich"),
-            "petsc": _version("petsc"),
-            "petsc4py": _version("petsc4py"),
-            "adios2": _version("adios2"),
-        },
-        python_version=platform.python_version(),
-        mpi_size=int(os.environ.get("OMPI_COMM_WORLD_SIZE") or os.environ.get("PMI_SIZE") or "1"),
         mesh_options=spec.mesh.model_dump(mode="json"),
         solver_options=petsc_options(spec.solver),
         output_paths={
@@ -846,10 +826,3 @@ def _axis(axis: tuple[Any, ...]) -> tuple[float, float, float]:
             ]
         )
     return (float(axis[0]), float(axis[1]), float(axis[2]))
-
-
-def _version(package: str) -> str | None:
-    try:
-        return importlib.metadata.version(package)
-    except importlib.metadata.PackageNotFoundError:
-        return None

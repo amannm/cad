@@ -37,3 +37,11 @@
 	url = https://github.com/pydantic/pydantic.git
 	ignore = all
 	shallow = true
+[submodule "reference/basix"]
+	path = reference/basix
+	url = https://github.com/FEniCS/basix.git
+	ignore = all
+[submodule "reference/ffcx"]
+	path = reference/ffcx
+	url = https://github.com/FEniCS/ffcx.git
+	ignore = all

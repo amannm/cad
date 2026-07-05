@@ -13,14 +13,7 @@ dependencies = [
   "pint>=0.24,<1",
   "PyYAML>=6.0,<7",
   "gmsh>=4.13,<5",
-  "fenics-basix>=0.11",
-  "fenics-ffcx>=0.11",
-  "fenics-ufl>=2026.1",
-  "mpi4py>=4,<5",
-  "petsc>=3.23,<4",
-  "petsc4py>=3.23,<4",
-  "adios2>=2.10,<3",
-  "mpich>=4,<5",
+  "fenics-dolfinx[petsc4py]",
 ]
 
 [project.scripts]
@@ -28,3 +21,18 @@ cadmp = "cadmultiphysics.cli:main"
 
 [tool.uv]
 package = true
+prerelease = "allow"
+no-build-isolation-package = ["fenics-dolfinx"]
+config-settings = { "cmake.build-type" = "Release", "cmake.define.DOLFINX_DIR" = "/Users/amannmalik/PycharmProjects/cad/.venv/lib/cmake/dolfinx", "cmake.define.CMAKE_PREFIX_PATH" = "/Users/amannmalik/PycharmProjects/cad/.venv;/Users/amannmalik/PycharmProjects/cad/.venv/lib/python3.12/site-packages/basix;/opt/homebrew/opt/petsc;/opt/homebrew/opt/hdf5-mpi;/opt/homebrew/opt/adios2;/opt/homebrew/opt/spdlog;/opt/homebrew/opt/pugixml;/opt/homebrew/opt/scotch;/opt/homebrew" }
+dependency-metadata = [
+  { name = "petsc4py", version = "3.24.6", requires-dist = [] },
+]
+constraint-dependencies = [
+  "fenics-basix @ file:///Users/amannmalik/PycharmProjects/cad/reference/basix",
+  "fenics-ffcx @ file:///Users/amannmalik/PycharmProjects/cad/reference/ffcx",
+  "fenics-ufl @ file:///Users/amannmalik/PycharmProjects/cad/reference/ufl",
+  "petsc4py==3.24.6",
+]
+
+[tool.uv.sources]
+fenics-dolfinx = { path = "reference/dolfinx/python" }
