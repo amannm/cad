@@ -22,3 +22,18 @@
 	path = reference/ufl
 	url = https://github.com/FEniCS/ufl.git
 	ignore = all
+[submodule "reference/pint"]
+	path = reference/pint
+	url = https://github.com/hgrecco/pint.git
+	ignore = all
+	shallow = true
+[submodule "reference/ADIOS2"]
+	path = reference/ADIOS2
+	url = https://github.com/ornladios/ADIOS2.git
+	ignore = all
+	shallow = true
+[submodule "reference/pydantic"]
+	path = reference/pydantic
+	url = https://github.com/pydantic/pydantic.git
+	ignore = all
+	shallow = true

@@ -5,6 +5,10 @@ flowchart LR
     UNITS["Units + coordinate frame\ncanonical scale"]
     TAGS["Semantic tag registry\nname, dim, id, role, coverage rules"]
     CACHE["Artifact cache + provenance\nspec, CAD, mesh, form, tangent hashes"]
+    DAG["Execution DAG / artifact planner\nrecompute decisions, stage runners, invalidation"]
+    CONTRACT["Geometry/mesh contract\ndimension, entity names, scale, tag coverage, cell type/order"]
+    COUPLING["Multiphysics coupling manager\nmonolithic/staggered policy, block dependencies, transfer/projection"]
+    RESTART["Restart schema/version manager\nmesh hash, space signature, fields, internal vars, provenance"]
 
     CQ["CadQuery geometry builder"]
     GEOCHK["Geometry validator\norientation, watertightness, scale, named entities"]
@@ -38,26 +42,39 @@ flowchart LR
     U --> CFG --> SPEC
     SPEC --> UNITS
     SPEC --> TAGS
-    SPEC --> CACHE
+    SPEC --> DAG --> CACHE
     SPEC -- geometry params --> CQ
     SPEC -- mesh params --> GM
     SPEC -- field/material/load/BC/physics/solver specs --> PHYS
+    DAG -- geometry stage --> CQ
+    DAG -- mesh stage --> GM
+    DAG -- forms/solve stages --> PHYS
+    DAG -- output stage --> IO
+    CACHE -- reusable artifacts + provenance --> DAG
 
     UNITS --> CQ
     CQ --> GEOCHK
     GEOCHK --> CACHE
+    GEOCHK -- geometry metadata --> CONTRACT
     GEOCHK --> GM
     TAGS --> TAGMAP
+    TAGS -- required semantic coverage --> CONTRACT
     GM --> TAGMAP
     TAGMAP --> MESHVAL
+    TAGMAP -- physical group ids/names --> CONTRACT
     UNITS --> MESHVAL
+    CONTRACT -- mesh requirements --> MESHVAL
     MESHVAL --> IM
+    CONTRACT -- import contract --> IM
     IM --> CACHE
 
     SPEC -- space spec --> FS
     IM --> FS
     TAGS --> FS
     FS --> DOFPLAN
+    SPEC -- coupling policy --> COUPLING
+    FS -- field blocks --> COUPLING
+    DOFPLAN -- block dependencies/layout --> COUPLING
     SPEC -- material map --> MDB
     UNITS --> MDB
     TAGS --> MDB
@@ -80,6 +97,7 @@ flowchart LR
     CONT -- current load factor + initial guess --> SNES
     FS -- u, du, v, block spaces, measures --> PHYS
     MATLIB -- response + consistent tangent API --> PHYS
+    COUPLING -- coupled field plan --> PHYS
     TXNSTATE -- committed/trial vars --> PHYS
     LOADS -- body/natural terms --> PHYS
     BCS -- weak terms --> PHYS
@@ -99,6 +117,11 @@ flowchart LR
 
     FS --> POST
     POST --> IO
+    IM -- mesh hash + tag signature --> RESTART
+    FS -- space signature --> RESTART
+    TXNSTATE -- committed field/internal-var signatures --> RESTART
+    CACHE -- provenance bundle --> RESTART
+    RESTART -- compatible restart/checkpoint package --> IO
     IO --> OUT
     SNES --> OBS
     CONV --> OBS

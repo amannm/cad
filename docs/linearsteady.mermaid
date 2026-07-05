@@ -5,6 +5,10 @@ flowchart LR
     UNITS["Units + coordinate frame\ncanonical scale"]
     TAGS["Semantic tag registry\nname, dim, id, role, coverage rules"]
     CACHE["Artifact cache + provenance\nspec, CAD, mesh, form, operator hashes"]
+    DAG["Execution DAG / artifact planner\nrecompute decisions, stage runners, invalidation"]
+    CONTRACT["Geometry/mesh contract\ndimension, entity names, scale, tag coverage, cell type/order"]
+    COUPLING["Multiphysics coupling manager\nmonolithic/staggered policy, block dependencies, transfer/projection"]
+    RESTART["Restart schema/version manager\nmesh hash, space signature, fields, provenance"]
 
     CQ["CadQuery geometry builder\nparameterized solids/surfaces"]
     GEOCHK["Geometry validator\norientation, watertightness, scale, named entities"]
@@ -37,25 +41,38 @@ flowchart LR
     U --> CFG --> SPEC
     SPEC --> UNITS
     SPEC --> TAGS
-    SPEC --> CACHE
+    SPEC --> DAG --> CACHE
     SPEC -- geometry params --> CQ
     SPEC -- mesh params --> GM
     SPEC -- field/material/load/BC/physics/solver specs --> PHYS
+    DAG -- geometry stage --> CQ
+    DAG -- mesh stage --> GM
+    DAG -- forms/solve stages --> PHYS
+    DAG -- output stage --> IO
+    CACHE -- reusable artifacts + provenance --> DAG
 
     UNITS -- scale/frame rules --> CQ
     CQ -- CAD model --> GEOCHK
     GEOCHK -- validated CAD --> CACHE
+    GEOCHK -- geometry metadata --> CONTRACT
     GEOCHK -- validated CAD --> GM
     TAGS -- required groups --> TAGMAP
+    TAGS -- required semantic coverage --> CONTRACT
     GM -- gmsh model + mesh + physical names --> TAGMAP
     TAGMAP -- semantic mesh groups --> MESHVAL
+    TAGMAP -- physical group ids/names --> CONTRACT
     UNITS -- coordinate scale --> MESHVAL
+    CONTRACT -- mesh requirements --> MESHVAL
     MESHVAL -- validated mesh + tags --> IM
+    CONTRACT -- import contract --> IM
     IM -- MeshData artifacts --> CACHE
 
     IM -- mesh + meshtags + physical_groups --> FS
     TAGS -- measure/tag names --> FS
     FS --> DOFPLAN
+    SPEC -- coupling policy --> COUPLING
+    FS -- field blocks --> COUPLING
+    DOFPLAN -- block dependencies/layout --> COUPLING
     DOFPLAN -- block layout + nullspaces --> LINSYS
     SPEC -- material map --> MDB
     UNITS -- unit checks --> MDB
@@ -73,6 +90,7 @@ flowchart LR
 
     FS -- trial/test/block spaces + dx/ds --> PHYS
     CF -- coefficients/constants --> PHYS
+    COUPLING -- coupled field plan --> PHYS
     LOADS -- body/natural terms --> PHYS
     BCS -- weak terms --> PHYS
     PHYS -- residual/bilinear/linear forms --> FORMCHK
@@ -93,6 +111,11 @@ flowchart LR
     CACHE -- provenance hashes --> OBS
     FS -- spaces + measures --> POST
     POST -- derived fields + integrals --> IO
+    IM -- mesh hash + tag signature --> RESTART
+    FS -- space signature --> RESTART
+    POST -- field/output signatures --> RESTART
+    CACHE -- provenance bundle --> RESTART
+    RESTART -- compatible restart/checkpoint package --> IO
     IO -- checkpoints + visualization files --> OUT
     OBS -- diagnostics --> OUT
     IM -- mesh + tags --> OUT
