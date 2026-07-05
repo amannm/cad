@@ -182,18 +182,20 @@ def _apply_sizes(spec: ProblemSpec, entities: dict[str, GeometryEntityIR], tags:
             targets = gmsh.model.getBoundary([(entities[name].dim, entities[name].backend_tag)], combined=False, oriented=False, recursive=True)
         elif name in bindings:
             binding = bindings[name]
-            targets = gmsh.model.getBoundary([(binding.dim, tag) for tag in binding.entity_tags], combined=False, oriented=False, recursive=True)
-        if not targets:
+            bound = [(binding.dim, tag) for tag in binding.entity_tags]
+            targets = bound if binding.dim == 0 else gmsh.model.getBoundary(bound, combined=False, oriented=False, recursive=True)
+        points = [target for target in targets if target[0] == 0]
+        if not points:
             diagnostics.append(
                 Diagnostic(
                     code="MESH_LOCAL_SIZE_TARGET_UNKNOWN",
-                    message=f"Local mesh size target '{name}' is not a geometry entity or tag.",
+                    message=f"Local mesh size target '{name}' does not resolve to mesh points.",
                     path=("mesh", "size", "local", name),
                     source="mesh",
                 )
             )
             continue
-        gmsh.model.mesh.setSize([target for target in targets if target[0] == 0], size)
+        gmsh.model.mesh.setSize(points, size)
     if diagnostics:
         raise MeshError(diagnostics)
 
@@ -219,6 +221,8 @@ def _metadata(
         entities=tuple(sorted(entities.values(), key=lambda entity: entity.name)),
         tags=tags,
         physical_groups={binding.physical_name: binding.physical_id for binding in tags.bindings},
+        physical_names={binding.physical_id: binding.physical_name for binding in tags.bindings},
+        partition={"requested": spec.mesh.partitions, "actual": 1},
         quality_report=quality_report,
     )
 
@@ -405,21 +409,31 @@ def _selector_matches(selector: tuple[str, str, float], bounds: tuple[float, flo
 
 
 def _cell_type_diagnostics(spec: ProblemSpec) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
     supported = {
         1: {"interval"},
         2: {"triangle"},
         3: {"tetrahedron"},
     }
     if spec.mesh.cell_type not in supported[spec.mesh.dimension]:
-        return [
+        diagnostics.append(
             Diagnostic(
                 code="MESH_CELL_TYPE_UNSUPPORTED",
                 message=f"Gmsh mesh generation for {spec.mesh.cell_type} cells is not implemented.",
                 path=("mesh", "cell_type"),
                 source="mesh",
             )
-        ]
-    return []
+        )
+    if spec.mesh.partitions != 1:
+        diagnostics.append(
+            Diagnostic(
+                code="MESH_PARTITIONING_UNSUPPORTED",
+                message="Gmsh mesh partitioning is not implemented in this mesh generator.",
+                path=("mesh", "partitions"),
+                source="mesh",
+            )
+        )
+    return diagnostics
 
 
 def _vec3(value: Any) -> tuple[float, float, float]:

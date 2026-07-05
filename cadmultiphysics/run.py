@@ -54,15 +54,32 @@ def solve(problem: str, out: str) -> CommandResult:
 def solve_spec(spec: ProblemSpec, out: str) -> CommandResult:
     run_dir = Path(out).resolve()
     domain, plan, manifest, artifacts = _problem_artifacts(spec, run_dir, "solve")
-    result = execute_solve(spec, plan, run_dir)
-    artifacts.update({name: _artifact(path) for name, path in result.artifacts.items()})
-    manifest = _write_manifest(spec, run_dir, artifacts)
-    artifacts["manifest"] = _artifact(run_dir / "manifest.json")
-    restart_path = run_dir / "restarts" / "restart_0000.json"
-    restart_state = _solve_restart_state(spec, manifest, artifacts["manifest"].sha256, result.state)
-    write_json(restart_path, restart_state.model_dump(mode="json"))
-    artifacts["restart_0000"] = _artifact(restart_path)
-    return _finish_problem_command("solve", spec, domain, plan, manifest, artifacts, result.diagnostics, run_dir, result.exit_code, result.state, result.steps)
+    diagnostics: tuple[Diagnostic, ...] = ()
+    state: SolutionState | None = None
+    steps: tuple[StepRecord, ...] = ()
+    exit_code = 0
+    try:
+        build = generate_mesh(spec, run_dir / "mesh")
+        _write_mesh_artifacts(build.metadata, build.artifacts)
+        artifacts.update({name: _artifact(path) for name, path in build.artifacts.items()})
+        result = execute_solve(spec, plan, run_dir)
+        artifacts.update({name: _artifact(path) for name, path in result.artifacts.items()})
+        diagnostics = result.diagnostics
+        state = result.state
+        steps = result.steps
+        exit_code = result.exit_code
+        manifest = _write_manifest(spec, run_dir, artifacts)
+        artifacts["manifest"] = _artifact(run_dir / "manifest.json")
+        restart_path = run_dir / "restarts" / "restart_0000.json"
+        restart_state = _solve_restart_state(spec, manifest, artifacts["manifest"].sha256, result.state)
+        write_json(restart_path, restart_state.model_dump(mode="json"))
+        artifacts["restart_0000"] = _artifact(restart_path)
+    except MeshError as exc:
+        diagnostics = tuple(exc.diagnostics)
+        exit_code = 1
+        manifest = _write_manifest(spec, run_dir, artifacts)
+        artifacts["manifest"] = _artifact(run_dir / "manifest.json")
+    return _finish_problem_command("solve", spec, domain, plan, manifest, artifacts, diagnostics, run_dir, exit_code, state, steps)
 
 
 def restart(restart_path: str, out: str) -> CommandResult:

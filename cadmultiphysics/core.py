@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
+import math
 import os
 import platform
 from typing import Any
@@ -333,7 +334,7 @@ def _semantic_diagnostics(raw: ProblemInput) -> list[Diagnostic]:
                 source="solver",
             )
         )
-    diagnostics.extend(_solver_profile_diagnostics(raw.solver))
+    diagnostics.extend(_solver_profile_diagnostics(raw.mode, raw.solver))
     return diagnostics
 
 
@@ -558,9 +559,8 @@ def _time_grid(spec: ProblemSpec) -> TimeGrid:
     stop = float(spec.time.stop.magnitude)
     step = float(spec.time.step.magnitude)
     span = stop - start
-    steps = int(span // step)
-    if start + steps * step < stop:
-        steps += 1
+    tolerance = 1.0e-12 * max(1.0, abs(span), abs(step))
+    steps = max(1, int(math.ceil((span - tolerance) / step)))
     return TimeGrid(start=start, stop=stop, step=step, steps=steps, unit=spec.time.step.unit)
 
 
@@ -636,15 +636,91 @@ def _unknown(code: str, message: str, path: tuple[str | int, ...]) -> Diagnostic
     return Diagnostic(code=code, message=message, path=path, source="schema")
 
 
-def _solver_profile_diagnostics(profile: Any) -> list[Diagnostic]:
-    if profile.allow_backend_options:
-        return []
+def _solver_profile_diagnostics(mode: Mode, profile: Any) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
-    diagnostics.extend(_option_diagnostics(profile.linear, _LINEAR_OPTIONS, ("solver", "linear")))
-    diagnostics.extend(_option_diagnostics(profile.nonlinear, _NONLINEAR_OPTIONS, ("solver", "nonlinear")))
-    for name, options in profile.fieldsplits.items():
-        diagnostics.extend(_option_diagnostics(options, _LINEAR_OPTIONS, ("solver", "fieldsplits", name)))
+    if not profile.allow_backend_options:
+        diagnostics.extend(_option_diagnostics(profile.linear, _LINEAR_OPTIONS, ("solver", "linear")))
+        diagnostics.extend(_option_diagnostics(profile.nonlinear, _NONLINEAR_OPTIONS, ("solver", "nonlinear")))
+        for name, options in profile.fieldsplits.items():
+            diagnostics.extend(_option_diagnostics(options, _LINEAR_OPTIONS, ("solver", "fieldsplits", name)))
+    diagnostics.extend(_solver_structure_diagnostics(mode, profile))
+    diagnostics.extend(_solver_collision_diagnostics(profile))
     return diagnostics
+
+
+def _solver_structure_diagnostics(mode: Mode, profile: Any) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    if mode.startswith("linear") and profile.nonlinear:
+        diagnostics.append(
+            Diagnostic(
+                code="SOLVER_NONLINEAR_OPTIONS_UNEXPECTED",
+                message=f"Mode '{mode}' must not configure nonlinear solver options.",
+                path=("solver", "nonlinear"),
+                source="solver",
+            )
+        )
+    fieldsplit_pc = profile.linear.get("pc_type") == "fieldsplit"
+    fieldsplit_options = any(key.startswith("pc_fieldsplit") for key in profile.linear)
+    if profile.fieldsplits and not fieldsplit_pc:
+        diagnostics.append(
+            Diagnostic(
+                code="SOLVER_FIELDSPLIT_PC_MISSING",
+                message="Fieldsplit solver blocks require linear.pc_type='fieldsplit'.",
+                path=("solver", "fieldsplits"),
+                source="solver",
+            )
+        )
+    if fieldsplit_options and not fieldsplit_pc:
+        diagnostics.append(
+            Diagnostic(
+                code="SOLVER_FIELDSPLIT_PC_MISSING",
+                message="PETSc fieldsplit options require linear.pc_type='fieldsplit'.",
+                path=("solver", "linear"),
+                source="solver",
+            )
+        )
+    if fieldsplit_pc and not profile.fieldsplits:
+        diagnostics.append(
+            Diagnostic(
+                code="SOLVER_FIELDSPLIT_BLOCKS_MISSING",
+                message="linear.pc_type='fieldsplit' requires solver.fieldsplits.",
+                path=("solver", "fieldsplits"),
+                source="solver",
+            )
+        )
+    return diagnostics
+
+
+def _solver_collision_diagnostics(profile: Any) -> list[Diagnostic]:
+    keys: dict[str, tuple[str | int, ...]] = {}
+    diagnostics: list[Diagnostic] = []
+    for key, path in _solver_option_paths(profile):
+        if key in keys:
+            diagnostics.append(
+                Diagnostic(
+                    code="SOLVER_OPTION_PREFIX_COLLISION",
+                    message=f"PETSc option '{key}' is produced more than once.",
+                    path=path,
+                    source="solver",
+                    payload={"first_path": keys[key]},
+                )
+            )
+        else:
+            keys[key] = path
+    return diagnostics
+
+
+def _solver_option_paths(profile: Any) -> tuple[tuple[str, tuple[str | int, ...]], ...]:
+    prefix = profile.prefix
+    paths: list[tuple[str, tuple[str | int, ...]]] = []
+    for key in profile.nonlinear:
+        paths.append((f"{prefix}{key}", ("solver", "nonlinear", key)))
+    for key in profile.linear:
+        paths.append((f"{prefix}{key}", ("solver", "linear", key)))
+    for name, split in profile.fieldsplits.items():
+        for key in split:
+            paths.append((f"{prefix}fieldsplit_{name}_{key}", ("solver", "fieldsplits", name, key)))
+    return tuple(paths)
 
 
 def _option_diagnostics(options: dict[str, Any], allowed: set[str], path: tuple[str | int, ...]) -> list[Diagnostic]:

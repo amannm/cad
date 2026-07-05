@@ -322,6 +322,8 @@ class MeshMetadata(StrictModel):
     entities: tuple[GeometryEntityIR, ...]
     tags: TagMap
     physical_groups: dict[str, int]
+    physical_names: dict[int, str]
+    partition: dict[str, Any]
     quality_report: dict[str, Any] = Field(default_factory=dict)
 
 
