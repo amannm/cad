@@ -28,9 +28,11 @@ from cadmultiphysics.schema import (
     ProblemInput,
     ProblemSpec,
     RunManifest,
+    RunPlan,
     SemanticTagInput,
     SemanticTagSpec,
     TagsSpec,
+    TimeGrid,
     TimePlan,
 )
 from cadmultiphysics.units import UnitDiagnostics, canonical_quantity, canonical_value, unit_spec
@@ -100,6 +102,20 @@ def build_run_manifest(spec: ProblemSpec, run_dir: str) -> RunManifest:
             "manifest_hash_required": True,
             "field_layout": tuple(field.name for field in spec.fields),
         },
+    )
+
+
+def build_run_plan(spec: ProblemSpec) -> RunPlan:
+    linear = spec.mode.startswith("linear")
+    transient = spec.mode.endswith("_transient")
+    time = _time_grid(spec) if transient else None
+    return RunPlan(
+        mode=spec.mode,
+        problem_kind="linear" if linear else "nonlinear",
+        transient=transient,
+        solver="ksp" if linear else "snes",
+        steps=time.steps if time else 1,
+        time=time,
     )
 
 
@@ -432,6 +448,28 @@ def _validate_time_values(spec: ProblemSpec) -> None:
                 )
             ]
         )
+
+
+def _time_grid(spec: ProblemSpec) -> TimeGrid:
+    if spec.time is None:
+        raise UnitDiagnostics(
+            [
+                Diagnostic(
+                    code="TIME_REQUIRED",
+                    message=f"Mode '{spec.mode}' requires a time block.",
+                    path=("time",),
+                    source="schema",
+                )
+            ]
+        )
+    start = float(spec.time.start.magnitude)
+    stop = float(spec.time.stop.magnitude)
+    step = float(spec.time.step.magnitude)
+    span = stop - start
+    steps = int(span // step)
+    if start + steps * step < stop:
+        steps += 1
+    return TimeGrid(start=start, stop=stop, step=step, steps=steps, unit=spec.time.step.unit)
 
 
 def _entity_diagnostics(entity: GeometryEntityInput, path: tuple[str | int, ...]) -> list[Diagnostic]:

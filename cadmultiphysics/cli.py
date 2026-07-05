@@ -12,6 +12,7 @@ from cadmultiphysics.core import build_domain_ir, build_problem_spec, build_run_
 from cadmultiphysics.diagnostics import Diagnostic, diagnostics_payload
 from cadmultiphysics.errors import CadMPError
 from cadmultiphysics.io import load_config, write_json
+from cadmultiphysics.run import CommandResult, mesh, restart, solve
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -48,12 +49,12 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("problem")
         command.add_argument("--out", required=True)
         command.add_argument("--json", action="store_true")
-        command.set_defaults(func=_not_implemented(name.upper()))
+        command.set_defaults(func=_mesh if name == "mesh" else _solve)
     restart = subparsers.add_parser("restart")
     restart.add_argument("restart")
     restart.add_argument("--out", required=True)
     restart.add_argument("--json", action="store_true")
-    restart.set_defaults(func=_not_implemented("RESTART"))
+    restart.set_defaults(func=_restart)
     return parser
 
 
@@ -94,14 +95,27 @@ def _inspect(args: argparse.Namespace) -> int:
         _print_json(payload)
         return 0
     status = payload.get("status", "<unknown>")
-    mode = payload.get("mode", payload.get("domain", {}).get("mode", "<unknown>"))
-    content_hash = payload.get("content_hash", payload.get("domain", {}).get("content_hash", "<unknown>"))
+    domain = payload.get("domain") or {}
+    mode = payload.get("mode") or domain.get("mode", "<unknown>")
+    content_hash = payload.get("content_hash") or domain.get("content_hash", "<unknown>")
     print(f"status {status}")
     print(f"mode {mode}")
     print(f"content_hash {content_hash}")
     if "diagnostics" in payload:
         print(f"diagnostics {len(payload['diagnostics'])}")
     return 0
+
+
+def _mesh(args: argparse.Namespace) -> int:
+    return _emit_command_result(mesh(args.problem, args.out), args)
+
+
+def _solve(args: argparse.Namespace) -> int:
+    return _emit_command_result(solve(args.problem, args.out), args)
+
+
+def _restart(args: argparse.Namespace) -> int:
+    return _emit_command_result(restart(args.restart, args.out), args)
 
 
 def _version(args: argparse.Namespace) -> int:
@@ -121,22 +135,15 @@ def _version(args: argparse.Namespace) -> int:
     return 0
 
 
-def _not_implemented(name: str):
-    def run(args: argparse.Namespace) -> int:
-        return _fail(
-            [
-                Diagnostic(
-                    code=f"{name}_NOT_IMPLEMENTED",
-                    message=f"{name.lower()} backend execution is not implemented in this Phase 0 slice.",
-                    path=(),
-                    source="cli",
-                )
-            ],
-            args.json,
-            exit_code=2,
-        )
-
-    return run
+def _emit_command_result(result: CommandResult, args: argparse.Namespace) -> int:
+    payload = result.report.model_dump(mode="json")
+    if args.json:
+        _print_json(payload)
+        return result.exit_code
+    print(f"report {args.out}/report.json")
+    if result.report.diagnostics:
+        _fail(list(result.report.diagnostics), False, result.exit_code)
+    return result.exit_code
 
 
 def _fail(diagnostics: list[Diagnostic], json_mode: bool, exit_code: int = 1) -> int:

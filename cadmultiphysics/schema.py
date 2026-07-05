@@ -4,6 +4,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from cadmultiphysics.diagnostics import Diagnostic
 from cadmultiphysics.units import QuantitySpec, UnitSpec
 
 Name = Annotated[str, Field(min_length=1, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]
@@ -294,3 +295,52 @@ class RunManifest(StrictModel):
     mesh_options: dict[str, Any]
     output_paths: dict[str, str]
     restart: dict[str, Any]
+    artifact_hashes: dict[str, str] = Field(default_factory=dict)
+
+
+class TimeGrid(StrictModel):
+    start: float
+    stop: float
+    step: float
+    steps: int = Field(ge=1)
+    unit: str
+
+
+class RunPlan(StrictModel):
+    mode: Mode
+    problem_kind: Literal["linear", "nonlinear"]
+    transient: bool
+    solver: Literal["ksp", "snes"]
+    steps: int = Field(ge=1)
+    time: TimeGrid | None = None
+
+
+class RunArtifact(StrictModel):
+    path: str
+    sha256: str
+
+
+class RunReport(StrictModel):
+    command: Literal["validate", "mesh", "solve", "restart"]
+    status: Literal["ok", "failed"]
+    name: str | None = None
+    mode: Mode | None = None
+    content_hash: str | None = None
+    domain: DomainIR | None = None
+    run_plan: RunPlan | None = None
+    manifest: str | None = None
+    manifest_hash: str | None = None
+    artifacts: dict[str, RunArtifact] = Field(default_factory=dict)
+    diagnostics: tuple[Diagnostic, ...] = ()
+
+
+class RestartState(StrictModel):
+    schema_version: str
+    content_hash: str
+    manifest_path: str
+    manifest_hash: str
+    mode: Mode
+    fields: tuple[str, ...]
+    step_index: int = Field(ge=0)
+    time: QuantitySpec | None = None
+    artifacts: dict[str, str] = Field(default_factory=dict)
