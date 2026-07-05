@@ -11,6 +11,7 @@
 - Do not include backwards compatibility, fallback behavior, resilience features.
 - Do not include user ergonomics, convenience, extensibility features.
 - Do not focus on testing at this time.
+- Do not add comments in source code.
 
 # Reference material (symlinked)
 - [CadQuery Source Code](reference/cadquery)

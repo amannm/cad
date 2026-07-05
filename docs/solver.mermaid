@@ -1,74 +1,62 @@
 flowchart TD
 
-    RUN["RunPlan\nmode, load schedule, time grid,\noutput cadence, checkpoint cadence"]
-    MODE{"Solver mode"}
+    RUN["RunPlan\nmode, time/load grid, outputs"]
+    MODE{"Mode"}
 
-    LS["Linear Steady\nassemble A,b once\nKSP solve"]
-    LT["Linear Transient\ntime integrator builds effective A,b\nKSP solve per step"]
-    NS["Nonlinear Steady\nassemble F,J,P\nPETSc SNES solve"]
-    NT["Nonlinear Transient\ntime integrator + assemble F,J,P\nPETSc SNES solve per step"]
+    LS["Linear steady\none assembly\nKSP"]
+    LT["Linear transient\neffective linear system per step\nKSP"]
+    NS["Nonlinear steady\nresidual + Jacobian\nSNES"]
+    NT["Nonlinear transient\ntime-discrete residual + Jacobian\nSNES per step"]
 
-    subgraph Shared[Shared solve pipeline]
-        PREP["PrepareStep\nopen trial state\napply time/load parameters\npredict transient state when needed"]
-        INTEGRATE["TimeIntegrator\nsteady no-op or transient residual weighting\nstages history updates"]
-        ASSEMBLE["AssemblyPlan\nforms, constants, coefficients,\nBC lifting, nullspaces, block IS/layout"]
-        LINEARIZE["LinearizationPlan\nlinear A,b or nonlinear F,J,P\nconsistent material tangents"]
-        ALG["AlgebraicSystem\nA,b,M or F,J,P\nMatNest/AIJ choice + Vec layout"]
-        PROFILE["SolverProfile\nPETSc options by prefix\nKSP/SNES/PC/FieldSplit\nroot + nested/field prefixes"]
-        SOLVE["SolverDriver\nexecute solve\nrecord PETSc status"]
-        CHECK["AcceptanceChecks\nPETSc converged reason, finite values,\nresidual/invariant thresholds"]
-        DECIDE{"Accepted?"}
-        COMMIT["CommitStep\ncommit state/history\nadvance stepper"]
-        FAIL["FailFast\nrollback trial state\nstop run with diagnostic report"]
+    subgraph Data[Inputs to a solve step]
+        DP["DiscreteProblem\nspaces, measures, dofmaps, tags, BCs"]
+        PHYS["PhysicsPackage\nUFL residual/forms\nmaterial updates\ninvariants"]
+        STATE["SolutionState\ncommitted state\ntrial state\nhistory/material state"]
+        FORMS["CompiledForms\nDOLFINx fem.form objects\ncache key includes dtype/options/entity maps"]
+        PROFILE["PETScProfile\nroot prefix + nested KSP/SNES/PC options\nfield split names"]
     end
 
-    subgraph State[State and data]
-        DMODEL["DiscreteModel\nspaces, dofmaps, measures,\nBC/load bindings, entity maps"]
-        PHYS["PhysicsPackage\nUFL forms, material updates,\ninvariants, tangent/preconditioner forms"]
-        STATESTORE["StateStore\ncommitted, trial, history,\nmaterial/internal variables"]
-        FORMCACHE["FormCache\ncompiled UFL kernels\nscalar type + versioned signatures"]
+    subgraph Step[Single deterministic step]
+        OPEN["OpenStep\ncopy committed -> trial\nset time/load parameters"]
+        PREDICT["Predict\nsteady no-op\ntransient predictor from history"]
+        TDISC["Apply time discretization\nsteady no-op\ntheta-family residual weighting"]
+        UPDATE["Update coefficients\nconstants, loads, material state\nfor current trial/time"]
+        BUILD{"Problem kind"}
+        LIN["Linear assembly\nA,b plus BC lifting\nnullspace/near-nullspace"]
+        NL["Nonlinear callbacks\nF(u), J(u), optional P(u)\nconsistent material tangent"]
+        ALG["AlgebraicSystem\nAIJ default + block IS\nMatNest optional"]
+        SOLVE["PETSc solve\nKSP or SNES\nrecord converged reason"]
+        ACCEPT["Acceptance checks\nPETSc converged reason\nfinite state\nrequired invariants"]
+        OK{"Accepted?"}
+        COMMIT["Commit\ntrial -> committed\nadvance history/material state"]
+        FAIL["Fail closed\nkeep committed state unchanged\nwrite diagnostic report"]
     end
 
-    subgraph Output[Outputs]
-        OUTPLAN["OutputPlan\nfields, probes, cadence, format"]
+    subgraph Out[Step outputs]
         POST["Postprocess\nprobes, integrals, derived fields"]
-        WRITE["Writers\nADIOS2/VTX, XDMF/HDF5, CSV/JSON"]
-        CKPT["Checkpoint\nstate + history + manifest hashes"]
-        REPORT["RunReport\nmode, status, convergence,\niterations, timings, versions"]
+        WRITE["Write artifacts\nADIOS2/VTX .bp primary\nXDMF/HDF5 limited/debug\nCSV/JSON reports"]
+        REPORT["RunReport\nstatus, iterations, timings, versions"]
     end
 
     RUN --> MODE
-    MODE -->|linear steady| LS --> PREP
-    MODE -->|linear transient| LT --> PREP
-    MODE -->|nonlinear steady| NS --> PREP
-    MODE -->|nonlinear transient| NT --> PREP
+    MODE -->|linear steady| LS --> OPEN
+    MODE -->|linear transient| LT --> OPEN
+    MODE -->|nonlinear steady| NS --> OPEN
+    MODE -->|nonlinear transient| NT --> OPEN
 
-    STATESTORE --> PREP
-    PREP --> INTEGRATE
-    INTEGRATE --> ASSEMBLE
-    DMODEL --> ASSEMBLE
-    PHYS --> ASSEMBLE
-    PHYS --> LINEARIZE
-    FORMCACHE --> ASSEMBLE
-    STATESTORE --> LINEARIZE
-    ASSEMBLE --> LINEARIZE
-    LINEARIZE --> ALG
-    ALG --> SOLVE
+    STATE --> OPEN --> PREDICT --> TDISC --> UPDATE --> BUILD
+    DP --> UPDATE
+    PHYS --> UPDATE
+    FORMS --> BUILD
+    BUILD -->|linear| LIN --> ALG
+    BUILD -->|nonlinear| NL --> ALG
     PROFILE --> SOLVE
-    SOLVE --> CHECK
-    PHYS --> CHECK
-    CHECK --> DECIDE
-    DECIDE -->|yes| COMMIT
-    DECIDE -->|no| FAIL
-    COMMIT --> STATESTORE
-    COMMIT --> POST
-    OUTPLAN --> POST --> WRITE
-    COMMIT --> CKPT
+    ALG --> SOLVE --> ACCEPT --> OK
+    OK -->|yes| COMMIT
+    OK -->|no| FAIL
+    COMMIT --> STATE
+    COMMIT --> POST --> WRITE --> REPORT
     SOLVE --> REPORT
-    CHECK --> REPORT
-    INTEGRATE --> REPORT
-    WRITE --> REPORT
-    CKPT --> REPORT
+    ACCEPT --> REPORT
     FAIL --> REPORT
-
-    COMMIT -->|next transient step if any| PREP
+    COMMIT -->|next transient/load step| OPEN

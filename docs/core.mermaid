@@ -1,94 +1,89 @@
 flowchart LR
 
-    subgraph Input[Input normalization]
-        CFG["User Config\nYAML / JSON / Python builder"]
-        SCHEMA["Schema Models\nPydantic strict models\nJSON Schema export"]
-        UNITS["Unit Normalization\nPint registry\ncanonical SI magnitudes\ndimensional checks"]
-        SPEC["ProblemSpec\ncanonical, immutable, hashable\nmode + physics + outputs"]
+    subgraph Input[Input and canonical spec]
+        CFG["Config Input\nYAML / JSON / Python builder"]
+        SCHEMA["Strict Schema\nPydantic models\nJSON Schema export"]
+        UNITS["Units\nPint registry\nSI canonical magnitudes\ndimensional checks"]
+        SPEC["ProblemSpec\nimmutable canonical data\nmode + physics + outputs\ncontent hash"]
     end
 
-    subgraph Domain[Domain IR]
-        MODEL["DomainModel\ngeometry refs, fields, materials,\nBCs, loads, interfaces"]
-        MODE["ModeContract\nlinear steady\nlinear transient\nnonlinear steady\nnonlinear transient"]
-        STORE["ArtifactStore\ncontent-addressed inputs, IRs,\nmesh, forms, results, reports"]
+    subgraph IR[Domain IR]
+        DOMAIN["DomainIR\ngeometry intent, fields, materials,\nBCs, loads, interfaces"]
+        MODE["ModeContract\nlinear steady | linear transient\nnonlinear steady | nonlinear transient"]
+        MANIFEST["RunManifest\ninput hashes, versions, paths\nreproducibility metadata"]
     end
 
-    subgraph GeometryMesh[Geometry and mesh]
-        GEOMAPI["Geometry API\nsmall internal B-rep protocol\nCadQuery/OCP or Gmsh OCC adapter"]
-        GEOM["GeometryModel\nB-rep + stable semantic names\nface/edge/volume handles"]
-        GEOMVALID["GeometryValidation\nclosed volumes, tolerances,\nname coverage, OCC heal status"]
-        TAGS["Semantic Tags\nphysical groups / regions\nmaterial + boundary + interface labels\nCAD entity dimension + name map"]
-        MESHPLAN["MeshPlan\ncell type, geometric order, size fields,\ncurvature, boundary layers, partitions"]
-        MESHGEN["MeshGenerator\nGmsh adapter\nexport mesh + tags"]
-        MESH["SemanticMesh\nDOLFINx mesh, cell/facet meshtags,\nCAD provenance, ghosting, partitions"]
-        MESHVALID["MeshValidation\norientation, tag coverage,\nquality thresholds"]
+    subgraph GeoMesh[Geometry, tags, mesh]
+        GEOMK["GeometryKernel\nGmsh OCC as primary kernel\nsmall internal geometry protocol"]
+        GEOM["GeometryModel\nB-rep entities + stable names\nvolumes/surfaces/curves/points"]
+        TAGS["TagMap\nsemantic names -> CAD dim/entity\nGmsh physical groups\nmaterial/boundary/interface labels"]
+        MESHPLAN["MeshPlan\ncell type/order, size fields,\ncurvature, boundary layers, partitions"]
+        MESHGEN["MeshGenerator\nGmsh adapter\n.msh + tag export"]
+        SEMMESH["SemanticMesh\nDOLFINx mesh + meshtags\nentity maps, partitions, ghosting"]
     end
 
-    subgraph Physics[Physics compilation]
-        FIELDS["FieldRegistry\nunknowns, components, units,\nvalue shape, element family/order"]
-        MATERIALS["MaterialRegistry\nparameters, constitutive state,\nupdate hooks"]
-        PHYS["PhysicsPackage\nUFL residuals/bilinears,\nIC/BC/load schemas, invariants,\nmaterial tangent contracts"]
-        COUPLING["CouplingGraph\nfield dependencies\nblock ownership"]
-        SPACES["SpaceBuilder\nBasix/UFL elements\nmixed spaces, subspaces"]
-        DISCRETE["DiscreteModel\nspaces, measures, dofmaps,\nBC/load/material bindings, entity maps"]
-        FORMS["FormCache\nUFL + element + quadrature +\nscalar type + compiler/runtime signature"]
+    subgraph Physics[Physics package]
+        FIELDS["FieldRegistry\nunknowns, components, units,\nelement family/order"]
+        MATERIALS["MaterialModels\nparameters + state variables\nconstitutive update + tangent"]
+        PHYS["PhysicsPackage\nUFL residuals/forms\nBC/load schema\ninvariant checks"]
+        COUPLING["CouplingPlan\nfield dependency graph\nblock splits and ownership"]
+        SPACES["SpaceBuilder\nBasix/UFL elements\nDOLFINx function spaces"]
+        DISCRETE["DiscreteProblem\nspaces, measures, dofmaps,\nBC/load/material bindings"]
+        FORMS["CompiledForms\nDOLFINx fem.form cache key:\nUFL + dtype + compiler opts + entity maps"]
     end
 
-    subgraph Algebra[Algebra and solve]
-        ALG["AlgebraicSystem\nA,b,M or F,J,P\nnullspaces, near-nullspaces, block IS, BC policy"]
-        LINPOLICY["LinearizationPolicy\nJacobian/tangent source, preconditioner form,\nconsistent residual update"]
-        PROFILE["SolverProfile\nPETSc options prefix tree\nKSP/SNES/PC/FieldSplit\nper-field and nested prefixes"]
-        DRIVER["SolverDriver\nexecute one algebraic solve"]
-        STEP["Stepper\nsteady, transient, load/time loop\nmode-specific assembly order"]
-        TIME["TimeIntegrator\nBE/CN/generalized-alpha hooks\nstate prediction + history update"]
-        STATE["StateStore\ncommitted, trial, history,\nmaterial/internal variables"]
-        DIAG["Diagnostics\nresiduals, iterations, timings,\nconservation/invariant checks"]
+    subgraph Solve[Algebra and execution]
+        STATE["SolutionState\ncommitted/trial fields\nhistory and material state"]
+        LINPOL["LinearizationPlan\nlinear A,b or nonlinear F,J,P\nconsistent tangent and preconditioner form"]
+        ALG["AlgebraicSystem\ndefault AIJ matrices + block IS\noptional MatNest for block experiments\nnullspaces / near-nullspaces"]
+        PROFILE["PETScProfile\noptions prefix tree\nKSP/SNES/PC/FieldSplit"]
+        STEP["StepController\nsteady one-shot\ntime/load loop"]
+        TIME["TimeDiscretization\nsteady no-op\ntheta family: BE/CN initially"]
+        DRIVER["SolverDriver\nassemble, solve, collect reasons\nfail closed on invalid status"]
+        DIAG["Diagnostics\nconvergence reason, residuals,\niterations, timings, invariants"]
     end
 
-    subgraph IO[Output and restart]
-        OUTPLAN["OutputPlan\nfields, probes, integrals,\ncadence, format"]
-        POST["Postprocess\nprojection, derived fields,\nprobes, global integrals"]
-        RESULTS["ResultWriters\nADIOS2/VTX, XDMF/HDF5,\nCSV/JSON reports"]
-        CATALYST["InSitu Adapter optional\nParaView Catalyst pipeline"]
-        CKPT["Checkpoint\nstate, history, time, mesh ids,\nmanifest hashes"]
-        REPORT["RunReport\nstatus, convergence, warnings,\nartifact hashes, versions"]
+    subgraph Output[Output]
+        OUTPLAN["OutputPlan\nfields, probes, integrals, cadence"]
+        POST["Postprocess\nderived fields, projections,\nprobes, global integrals"]
+        WRITERS["Writers\nprimary: ADIOS2/VTX .bp\nlimited/debug: XDMF/HDF5\nreports: CSV/JSON"]
+        RESTART["RestartState\nmesh ids, solution/history,\nmaterial state, manifest hash"]
+        REPORT["RunReport\nmode, status, diagnostics,\nartifacts, versions"]
     end
 
-    subgraph Gates[Validation gates]
-        VALID["ValidationGates\nschema, units, geometry, tags, mesh,\nphysics forms, solver profile, outputs"]
+    subgraph Gates[Transition validation]
+        VG["Validation at boundaries\nschema, units, tags, mesh quality,\nforms, solver profile, outputs"]
     end
 
     CFG --> SCHEMA --> UNITS --> SPEC
-    SPEC --> MODEL
+    SPEC --> DOMAIN
     SPEC --> MODE
-    SPEC --> STORE
-    MODEL --> GEOMAPI --> GEOM --> GEOMVALID --> TAGS
-    MODEL --> FIELDS
-    MODEL --> MATERIALS
-    MODEL --> PHYS
-    MODE --> PHYS
+    SPEC --> MANIFEST
 
+    DOMAIN --> GEOMK --> GEOM --> TAGS
     GEOM --> MESHPLAN
     TAGS --> MESHPLAN
-    MESHPLAN --> MESHGEN --> MESH --> MESHVALID --> DISCRETE
-    TAGS --> DISCRETE
+    MESHPLAN --> MESHGEN --> SEMMESH
 
-    FIELDS --> SPACES --> DISCRETE
-    MATERIALS --> PHYS
+    DOMAIN --> FIELDS --> SPACES --> DISCRETE
+    DOMAIN --> MATERIALS --> PHYS
+    MODE --> PHYS
     PHYS --> COUPLING
     PHYS --> DISCRETE
-    PHYS --> LINPOLICY
+    TAGS --> DISCRETE
+    SEMMESH --> DISCRETE
     DISCRETE --> FORMS
-    COUPLING --> LINPOLICY --> ALG
-    FORMS --> LINPOLICY
-    STATE --> LINPOLICY
-    STATE --> ALG
+
+    COUPLING --> LINPOL
+    FORMS --> LINPOL
+    MATERIALS --> LINPOL
+    STATE --> LINPOL
+    LINPOL --> ALG
+    PROFILE --> DRIVER
     MODE --> STEP
-    MODE --> TIME
     TIME --> STEP
     STATE --> TIME
-    STEP --> ALG
-    PROFILE --> DRIVER
+    STEP --> DRIVER
     ALG --> DRIVER --> STATE
     DRIVER --> DIAG
     STEP --> DIAG
@@ -96,30 +91,20 @@ flowchart LR
     OUTPLAN --> POST
     STATE --> POST
     PHYS --> POST
-    POST --> RESULTS
-    POST --> CATALYST
-    STATE --> CKPT
-    MESH --> CKPT
-    SPEC --> CKPT
+    POST --> WRITERS
+    STATE --> RESTART
+    SEMMESH --> RESTART
+    MANIFEST --> RESTART
     DIAG --> REPORT
-    RESULTS --> REPORT
-    CKPT --> REPORT
-    STORE --> REPORT
+    WRITERS --> REPORT
+    RESTART --> REPORT
+    MANIFEST --> REPORT
 
-    STORE -.-> GEOM
-    STORE -.-> MESH
-    STORE -.-> FORMS
-    STORE -.-> RESULTS
-    STORE -.-> CKPT
-
-    VALID -.-> SCHEMA
-    VALID -.-> UNITS
-    VALID -.-> GEOM
-    VALID -.-> GEOMVALID
-    VALID -.-> TAGS
-    VALID -.-> MESHVALID
-    VALID -.-> DISCRETE
-    VALID -.-> PHYS
-    VALID -.-> LINPOLICY
-    VALID -.-> PROFILE
-    VALID -.-> OUTPLAN
+    VG -.-> SCHEMA
+    VG -.-> UNITS
+    VG -.-> TAGS
+    VG -.-> SEMMESH
+    VG -.-> DISCRETE
+    VG -.-> FORMS
+    VG -.-> PROFILE
+    VG -.-> OUTPLAN
