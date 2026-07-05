@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cadmultiphysics"
+version = "0.1.0"
+description = "Compact CAD and multiphysics orchestration core"
+readme = "docs/SPEC.md"
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2.7,<3",
+  "pint>=0.24,<1",
+  "PyYAML>=6.0,<7"
+]
+
+[project.scripts]
+cadmp = "cadmultiphysics.cli:main"
+
+[tool.uv]
+package = true

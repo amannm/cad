@@ -1,0 +1,84 @@
+name: heated_bracket
+mode: nonlinear_transient
+units:
+  system: SI
+geometry:
+  backend: gmsh_occ
+  entities:
+    - type: box
+      name: body
+      size: ["0.10 m", "0.04 m", "0.02 m"]
+tags:
+  materials:
+    steel:
+      dim: 3
+      entities: [body]
+  boundaries:
+    fixed_left:
+      dim: 2
+      selector: "x == 0"
+    heat_top:
+      dim: 2
+      selector: "z == 0.02 m"
+fields:
+  - name: u
+    kind: vector
+    components: 3
+    unit: m
+    element:
+      family: Lagrange
+      order: 2
+  - name: T
+    kind: scalar
+    unit: K
+    element:
+      family: Lagrange
+      order: 1
+materials:
+  steel:
+    model: thermoelastic_small_strain
+    parameters:
+      E: 200 GPa
+      nu: 0.3
+      k: 45 W/(m*K)
+boundary_conditions:
+  - name: fixed_left
+    on: fixed_left
+    field: u
+    type: dirichlet
+    value: ["0 m", "0 m", "0 m"]
+loads:
+  - name: heat_top
+    on: heat_top
+    field: T
+    type: flux
+    value: 10000 W/m^2
+mesh:
+  cell_type: tetrahedron
+  order: 1
+  size:
+    global: 0.005 m
+solver:
+  prefix: bracket_
+  nonlinear:
+    snes_type: newtonls
+    snes_rtol: 1.0e-8
+  linear:
+    ksp_type: gmres
+    pc_type: fieldsplit
+  fieldsplits:
+    u:
+      ksp_type: preonly
+      pc_type: hypre
+    T:
+      ksp_type: preonly
+      pc_type: gamg
+output:
+  format: vtx
+  fields: [u, T]
+  cadence: every_step
+time:
+  start: 0 s
+  stop: 10 s
+  step: 0.1 s
+  scheme: backward_euler
