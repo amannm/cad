@@ -145,7 +145,21 @@ def _version(args: argparse.Namespace) -> int:
             "python": platform.python_version(),
             "packages": {
                 name: _package_version(name)
-                for name in ("pydantic", "pint", "PyYAML", "gmsh", "fenics-dolfinx", "fenics-ufl", "petsc4py", "adios2")
+                for name in (
+                    "pydantic",
+                    "pint",
+                    "PyYAML",
+                    "gmsh",
+                    "fenics-dolfinx",
+                    "fenics-basix",
+                    "fenics-ffcx",
+                    "fenics-ufl",
+                    "mpi4py",
+                    "mpich",
+                    "petsc",
+                    "petsc4py",
+                    "adios2",
+                )
             },
         }
     )

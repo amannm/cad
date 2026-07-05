@@ -1,11 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.metadata
-import importlib.util
 import json
-import math
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -13,7 +9,7 @@ from typing import Any
 
 from cadmultiphysics.diagnostics import Diagnostic
 from cadmultiphysics.io import write_json
-from cadmultiphysics.schema import AcceptanceCheck, ProblemSpec, RunPlan, SolutionState, StepRecord
+from cadmultiphysics.schema import AcceptanceCheck, MeshMetadata, ProblemSpec, RunPlan, SolutionState, StepRecord, TagBinding
 
 
 @dataclass(frozen=True)
@@ -26,16 +22,17 @@ class SolverResult:
 
 
 @dataclass(frozen=True)
-class BackendRequirement:
-    import_name: str
-    package_name: str
-    role: str
+class StepSolve:
+    field_state: dict[str, Any]
+    artifacts: dict[str, Path]
+    payload: dict[str, Any]
 
 
 class StepController:
-    def __init__(self, spec: ProblemSpec, plan: RunPlan, run_dir: Path) -> None:
+    def __init__(self, spec: ProblemSpec, plan: RunPlan, mesh: MeshMetadata, run_dir: Path) -> None:
         self.spec = spec
         self.plan = plan
+        self.mesh = mesh
         self.run_dir = run_dir
         self.artifacts: dict[str, Path] = {}
 
@@ -44,27 +41,55 @@ class StepController:
         self._ensure_dirs()
         committed = initial_solution_state(self.spec, self.plan)
         self._write_artifact("solution_state", self.run_dir / "restarts" / "state_committed.json", committed.model_dump(mode="json"))
-        dependency_report = backend_dependency_report(self.spec, self.plan)
-        self._write_artifact("backend_dependencies", self.run_dir / "logs" / "backend_dependencies.json", dependency_report)
-        self._write_artifact("field_output_plan", self.run_dir / "fields" / "output_plan.json", field_output_plan(self.spec, self.plan))
-        self._write_artifact("restart_plan", self.run_dir / "restarts" / "restart_plan.json", restart_plan(self.spec, self.plan))
         steps: list[StepRecord] = []
         diagnostics: list[Diagnostic] = []
-        missing = tuple(item for item in dependency_report["dependencies"] if not item["available"])
         while committed.committed_step < self.plan.steps:
             trial = open_trial_state(committed, self.plan)
-            self._write_artifact(f"trial_state_{trial.trial_step:04d}", self.run_dir / "logs" / f"state_trial_{trial.trial_step:04d}.json", trial.model_dump(mode="json"))
-            if missing:
-                record = self._missing_backend_step(committed, trial, missing)
-            else:
-                record = self._unimplemented_backend_step(committed, trial)
-            steps.append(record)
-            diagnostics.extend(record.diagnostics)
-            self._write_artifact(f"step_{record.index:04d}", self.run_dir / "logs" / f"step_{record.index:04d}.json", record.model_dump(mode="json"))
-            if record.status == "failed":
+            opened_state_hash = committed.state_hash
+            try:
+                solve = self._solve_step(trial)
+            except Exception as exc:
+                diagnostic = _solve_diagnostic(exc, trial.trial_step or committed.committed_step + 1)
+                record = _failed_step(
+                    self.spec,
+                    self.plan,
+                    committed,
+                    trial,
+                    ("open", "predict", "discretize", "update", "build", "solve", "accept", "fail"),
+                    (
+                        AcceptanceCheck(name="petsc_converged", status="failed", diagnostic=diagnostic.code, payload={"error": type(exc).__name__}),
+                        AcceptanceCheck(name="committed_state_unchanged", status="passed", payload={"state_hash": committed.state_hash}),
+                    ),
+                    (diagnostic,),
+                )
+                steps.append(record)
+                diagnostics.append(diagnostic)
+                self._write_artifact(f"step_{record.index:04d}", self.run_dir / "logs" / f"step_{record.index:04d}.json", record.model_dump(mode="json"))
                 break
-            committed = commit_trial_state(trial)
+            solved_trial = _hashed_state(trial.model_copy(update={"field_state": solve.field_state, "state_hash": ""}))
+            committed = commit_trial_state(solved_trial)
+            self.artifacts.update(solve.artifacts)
             self._write_artifact("solution_state", self.run_dir / "restarts" / "state_committed.json", committed.model_dump(mode="json"))
+            record = StepRecord(
+                index=committed.committed_step,
+                status="accepted",
+                mode=self.spec.mode,
+                solver=self.plan.solver,
+                phases=("open", "predict", "discretize", "update", "build", "solve", "accept", "commit", "postprocess", "write"),
+                target_time=committed.time,
+                time_unit=committed.time_unit,
+                opened_state_hash=opened_state_hash,
+                trial_state_hash=solved_trial.state_hash,
+                final_state_hash=committed.state_hash,
+                acceptance=(
+                    AcceptanceCheck(name="petsc_converged", status="passed", payload=solve.payload),
+                    AcceptanceCheck(name="finite_state", status="passed", payload=_finite_payload(solve.field_state)),
+                ),
+            )
+            steps.append(record)
+            self._write_artifact(f"step_{record.index:04d}", self.run_dir / "logs" / f"step_{record.index:04d}.json", record.model_dump(mode="json"))
+            if not self.plan.transient:
+                break
         trace = {
             "status": "failed" if diagnostics else "ok",
             "steps_planned": self.plan.steps,
@@ -83,102 +108,14 @@ class StepController:
             exit_code=1 if diagnostics else 0,
         )
 
-    def _missing_backend_step(self, committed: SolutionState, trial: SolutionState, missing: tuple[dict[str, Any], ...]) -> StepRecord:
-        names = tuple(item["import_name"] for item in missing)
-        diagnostic = Diagnostic(
-            code="SOLVER_BACKEND_DEPENDENCY_MISSING",
-            message=f"Solve execution requires missing backend packages: {', '.join(names)}.",
-            path=("solver", "backend"),
-            step_index=trial.trial_step,
-            source="solver",
-            payload={"missing": missing, "driver": self.plan.solver, "required_interface": self.plan.contract.physics_interface},
-        )
-        return self._failed_step(
-            committed,
-            trial,
-            ("open", "predict", "discretize", "update", "build", "fail"),
-            (
-                AcceptanceCheck(
-                    name="backend_dependencies",
-                    status="failed",
-                    diagnostic=diagnostic.code,
-                    payload={"missing": names},
-                ),
-                AcceptanceCheck(
-                    name="committed_state_unchanged",
-                    status="passed",
-                    payload={"state_hash": committed.state_hash},
-                ),
-            ),
-            (diagnostic,),
-        )
-
-    def _unimplemented_backend_step(self, committed: SolutionState, trial: SolutionState) -> StepRecord:
-        finite = finite_state_diagnostics(trial, trial.trial_step or committed.committed_step + 1)
-        if finite:
-            return self._failed_step(
-                committed,
-                trial,
-                ("open", "predict", "discretize", "update", "build", "solve", "accept", "fail"),
-                (
-                    AcceptanceCheck(name="backend_dependencies", status="passed"),
-                    AcceptanceCheck(name="finite_state", status="failed", diagnostic=finite[0].code),
-                    AcceptanceCheck(name="committed_state_unchanged", status="passed", payload={"state_hash": committed.state_hash}),
-                ),
-                finite,
-            )
-        diagnostic = Diagnostic(
-            code="SOLVER_BACKEND_NOT_IMPLEMENTED",
-            message=f"{self.spec.mode} solve execution requires the DOLFINx/UFL/PETSc backend driver.",
-            path=("solver",),
-            step_index=trial.trial_step,
-            source="solver",
-            payload={"required_interface": self.plan.contract.physics_interface, "driver": self.plan.solver},
-        )
-        return self._failed_step(
-            committed,
-            trial,
-            ("open", "predict", "discretize", "update", "build", "solve", "accept", "fail"),
-            (
-                AcceptanceCheck(name="backend_dependencies", status="passed"),
-                AcceptanceCheck(name="finite_state", status="passed"),
-                AcceptanceCheck(
-                    name="petsc_converged",
-                    status="failed",
-                    diagnostic=diagnostic.code,
-                    payload={"driver": self.plan.solver},
-                ),
-                AcceptanceCheck(
-                    name="committed_state_unchanged",
-                    status="passed",
-                    payload={"state_hash": committed.state_hash},
-                ),
-            ),
-            (diagnostic,),
-        )
-
-    def _failed_step(
-        self,
-        committed: SolutionState,
-        trial: SolutionState,
-        phases: tuple[str, ...],
-        acceptance: tuple[AcceptanceCheck, ...],
-        diagnostics: tuple[Diagnostic, ...],
-    ) -> StepRecord:
-        return StepRecord(
-            index=trial.trial_step or committed.committed_step + 1,
-            status="failed",
-            mode=self.spec.mode,
-            solver=self.plan.solver,
-            phases=phases,
-            target_time=trial.time,
-            time_unit=trial.time_unit,
-            opened_state_hash=committed.state_hash,
-            trial_state_hash=trial.state_hash,
-            final_state_hash=committed.state_hash,
-            acceptance=acceptance,
-            diagnostics=diagnostics,
-        )
+    def _solve_step(self, trial: SolutionState) -> StepSolve:
+        if self.spec.mode != "linear_steady":
+            raise NotImplementedError(f"{self.spec.mode} backend execution is not implemented")
+        field = _single_scalar_field(self.spec)
+        material_terms = _material_terms(self.spec, self.mesh)
+        if not material_terms:
+            raise ValueError("linear scalar solve requires at least one isotropic_heat material")
+        return _solve_linear_scalar(self.spec, self.plan, self.mesh, self.run_dir, trial, field, material_terms)
 
     def _write_artifact(self, name: str, path: Path, payload: Any) -> None:
         write_json(path, payload)
@@ -189,8 +126,8 @@ class StepController:
             path.mkdir(parents=True, exist_ok=True)
 
 
-def execute_solve(spec: ProblemSpec, plan: RunPlan, run_dir: Path) -> SolverResult:
-    return StepController(spec, plan, run_dir).run()
+def execute_solve(spec: ProblemSpec, plan: RunPlan, mesh: MeshMetadata, run_dir: Path) -> SolverResult:
+    return StepController(spec, plan, mesh, run_dir).run()
 
 
 def initial_solution_state(spec: ProblemSpec, plan: RunPlan) -> SolutionState:
@@ -238,101 +175,193 @@ def commit_trial_state(trial: SolutionState) -> SolutionState:
     )
 
 
-def backend_dependency_report(spec: ProblemSpec, plan: RunPlan) -> dict[str, Any]:
-    dependencies = tuple(_dependency_payload(requirement) for requirement in backend_requirements(spec, plan))
-    return {
-        "driver": plan.solver,
-        "mode": spec.mode,
-        "problem_kind": plan.problem_kind,
-        "required_interface": plan.contract.physics_interface,
-        "dependencies": dependencies,
-        "ready": all(item["available"] for item in dependencies),
+def _solve_linear_scalar(
+    spec: ProblemSpec,
+    plan: RunPlan,
+    mesh: MeshMetadata,
+    run_dir: Path,
+    trial: SolutionState,
+    field_name: str,
+    material_terms: tuple[tuple[float, int], ...],
+) -> StepSolve:
+    from mpi4py import MPI
+    from petsc4py import PETSc
+
+    import numpy as np
+    import ufl
+    from dolfinx import fem
+    from dolfinx.fem.petsc import LinearProblem
+    from dolfinx.io import VTXWriter
+    from dolfinx.io import gmsh as gmshio
+
+    mesh_data = gmshio.read_from_msh(mesh.path, MPI.COMM_WORLD, rank=0, gdim=mesh.dimension)
+    domain = mesh_data.mesh
+    cell_tags = mesh_data.cell_tags
+    facet_tags = mesh_data.facet_tags
+    V = fem.functionspace(domain, ("Lagrange", _field_order(spec, field_name)))
+    u = ufl.TrialFunction(V)
+    v = ufl.TestFunction(V)
+    dx = ufl.Measure("dx", domain=domain, subdomain_data=cell_tags)
+    ds = ufl.Measure("ds", domain=domain, subdomain_data=facet_tags)
+    a = _sum_forms([k * ufl.inner(ufl.grad(u), ufl.grad(v)) * dx(tag) for k, tag in material_terms])
+    L_terms = _load_forms(spec, mesh, v, dx, ds)
+    L = _sum_forms(L_terms) if L_terms else PETSc.ScalarType(0.0) * v * dx
+    bcs = _dirichlet_bcs(spec, mesh, V, facet_tags, fem, PETSc.ScalarType)
+    options = dict(spec.solver.linear)
+    options["ksp_error_if_not_converged"] = True
+    problem = LinearProblem(a, L, bcs=bcs, petsc_options_prefix=_petsc_prefix(spec), petsc_options=options)
+    uh = problem.solve()
+    uh.name = field_name
+    reason = int(problem.solver.getConvergedReason())
+    iterations = int(problem.solver.getIterationNumber())
+    norm = float(problem.solver.getResidualNorm())
+    if reason <= 0:
+        raise RuntimeError(f"PETSc KSP did not converge: {reason}")
+    array = np.asarray(np.real(uh.x.array), dtype=float)
+    local_min = float(np.min(array)) if array.size else float("inf")
+    local_max = float(np.max(array)) if array.size else float("-inf")
+    local_l2 = float(np.dot(array, array))
+    field_state = {
+        field_name: {
+            "min": float(domain.comm.allreduce(local_min, op=MPI.MIN)),
+            "max": float(domain.comm.allreduce(local_max, op=MPI.MAX)),
+            "l2_norm": float(domain.comm.allreduce(local_l2, op=MPI.SUM) ** 0.5),
+            "dofs_local": int(array.size),
+        }
     }
+    artifacts: dict[str, Path] = {}
+    if spec.output.format == "vtx" and trial.committed_step + 1 in plan.output_steps:
+        output_path = run_dir / "fields" / "solution.bp"
+        with VTXWriter(domain.comm, output_path, [uh]) as writer:
+            writer.write(float(trial.time or 0.0))
+        artifacts["solution_fields"] = output_path
+    payload = {"reason": reason, "iterations": iterations, "residual_norm": norm}
+    return StepSolve(field_state=field_state, artifacts=artifacts, payload=payload)
 
 
-def backend_requirements(spec: ProblemSpec, plan: RunPlan) -> tuple[BackendRequirement, ...]:
-    requirements = [
-        BackendRequirement("dolfinx", "fenics-dolfinx", "mesh conversion, function spaces, assembly, VTX writer"),
-        BackendRequirement("ufl", "fenics-ufl", "weak forms and symbolic residuals"),
-        BackendRequirement("petsc4py", "petsc4py", f"{plan.solver.upper()} solver driver and convergence reasons"),
-    ]
-    if spec.output.format == "vtx":
-        requirements.append(BackendRequirement("adios2", "adios2", "ADIOS2/BP field output"))
-    return tuple(requirements)
+def _single_scalar_field(spec: ProblemSpec) -> str:
+    fields = tuple(field for field in spec.fields if field.kind == "scalar")
+    if len(fields) != 1 or len(spec.fields) != 1:
+        raise NotImplementedError("linear scalar backend requires exactly one scalar field")
+    return fields[0].name
 
 
-def field_output_plan(spec: ProblemSpec, plan: RunPlan) -> dict[str, Any]:
-    return {
-        "format": spec.output.format,
-        "fields": spec.output.fields,
-        "derived_fields": spec.output.derived_fields,
-        "cadence": spec.output.cadence,
-        "steps": plan.output_steps,
-        "writer_options": spec.output.writer_options,
-    }
+def _field_order(spec: ProblemSpec, field_name: str) -> int:
+    for field in spec.fields:
+        if field.name == field_name:
+            return field.element.order
+    raise KeyError(field_name)
 
 
-def restart_plan(spec: ProblemSpec, plan: RunPlan) -> dict[str, Any]:
-    return {
-        "schema_version": spec.version,
-        "content_hash": spec.content_hash,
-        "cadence": plan.restart_cadence,
-        "steps": plan.restart_steps,
-        "checkpoint_policy": plan.checkpoint_policy,
-        "field_layout": tuple(field.name for field in spec.fields),
-    }
+def _material_terms(spec: ProblemSpec, mesh: MeshMetadata) -> tuple[tuple[float, int], ...]:
+    terms: list[tuple[float, int]] = []
+    for name, material in sorted(spec.materials.items()):
+        if material.model != "isotropic_heat":
+            raise NotImplementedError(f"linear scalar backend does not implement material model {material.model}")
+        binding = _binding(mesh, "materials", name)
+        terms.append((_quantity_scalar(material.parameters["k"]), binding.physical_id))
+    return tuple(terms)
 
 
-def finite_state_diagnostics(state: SolutionState, step_index: int | None = None) -> tuple[Diagnostic, ...]:
-    diagnostics: list[Diagnostic] = []
-    for root in ("field_state", "history_state", "material_state"):
-        diagnostics.extend(_finite_diagnostics(getattr(state, root), (root,), step_index))
-    return tuple(diagnostics)
+def _load_forms(spec: ProblemSpec, mesh: MeshMetadata, v: Any, dx: Any, ds: Any) -> list[Any]:
+    forms: list[Any] = []
+    for load in spec.loads:
+        binding = _binding_by_name(mesh, load.on)
+        value = _quantity_scalar(load.value)
+        if load.type == "source":
+            forms.append(value * v * dx(binding.physical_id))
+        elif load.type == "flux":
+            forms.append(value * v * ds(binding.physical_id))
+        else:
+            raise NotImplementedError(f"linear scalar backend does not implement load type {load.type}")
+    return forms
 
 
-def _finite_diagnostics(value: Any, path: tuple[str | int, ...], step_index: int | None) -> list[Diagnostic]:
-    diagnostics: list[Diagnostic] = []
-    if isinstance(value, Mapping):
-        for key, item in sorted(value.items()):
-            diagnostics.extend(_finite_diagnostics(item, (*path, str(key)), step_index))
-    elif isinstance(value, Sequence) and not isinstance(value, str | bytes):
-        for index, item in enumerate(value):
-            diagnostics.extend(_finite_diagnostics(item, (*path, index), step_index))
-    elif isinstance(value, int | float) and not isinstance(value, bool) and not math.isfinite(float(value)):
-        diagnostics.append(
-            Diagnostic(
-                code="SOLVER_STATE_NONFINITE",
-                message="Solution state contains a non-finite numeric value.",
-                path=path,
-                step_index=step_index,
-                source="solver",
-            )
-        )
-    return diagnostics
+def _dirichlet_bcs(spec: ProblemSpec, mesh: MeshMetadata, V: Any, facet_tags: Any, fem: Any, scalar_type: Any) -> list[Any]:
+    bcs: list[Any] = []
+    for bc in spec.bcs:
+        if bc.type != "dirichlet":
+            raise NotImplementedError(f"linear scalar backend does not implement boundary condition type {bc.type}")
+        binding = _binding_by_name(mesh, bc.on)
+        facets = facet_tags.find(binding.physical_id)
+        dofs = fem.locate_dofs_topological(V=V, entity_dim=binding.dim, entities=facets)
+        bcs.append(fem.dirichletbc(value=scalar_type(_quantity_scalar(bc.value)), dofs=dofs, V=V))
+    return bcs
 
 
-def _dependency_payload(requirement: BackendRequirement) -> dict[str, Any]:
-    return {
-        "import_name": requirement.import_name,
-        "package_name": requirement.package_name,
-        "role": requirement.role,
-        "available": _module_available(requirement.import_name),
-        "version": _version(requirement.package_name),
-    }
+def _binding(mesh: MeshMetadata, namespace: str, name: str) -> TagBinding:
+    for binding in mesh.tags.bindings:
+        if binding.namespace == namespace and binding.name == name:
+            return binding
+    raise KeyError(f"{namespace}/{name}")
 
 
-def _module_available(name: str) -> bool:
-    try:
-        return importlib.util.find_spec(name) is not None
-    except (ImportError, ValueError):
-        return False
+def _binding_by_name(mesh: MeshMetadata, name: str) -> TagBinding:
+    matches = tuple(binding for binding in mesh.tags.bindings if binding.name == name)
+    if len(matches) != 1:
+        raise KeyError(name)
+    return matches[0]
 
 
-def _version(package: str) -> str | None:
-    try:
-        return importlib.metadata.version(package)
-    except importlib.metadata.PackageNotFoundError:
-        return None
+def _quantity_scalar(value: Any) -> float:
+    if not isinstance(value, dict) or "magnitude" not in value:
+        raise TypeError("expected canonical scalar quantity")
+    magnitude = value["magnitude"]
+    if isinstance(magnitude, (list, tuple)):
+        raise TypeError("expected scalar magnitude")
+    return float(magnitude)
+
+
+def _sum_forms(forms: list[Any]) -> Any:
+    head, *tail = forms
+    value = head
+    for form in tail:
+        value += form
+    return value
+
+
+def _petsc_prefix(spec: ProblemSpec) -> str:
+    return spec.solver.prefix or f"{spec.name}_"
+
+
+def _failed_step(
+    spec: ProblemSpec,
+    plan: RunPlan,
+    committed: SolutionState,
+    trial: SolutionState,
+    phases: tuple[str, ...],
+    acceptance: tuple[AcceptanceCheck, ...],
+    diagnostics: tuple[Diagnostic, ...],
+) -> StepRecord:
+    return StepRecord(
+        index=trial.trial_step or committed.committed_step + 1,
+        status="failed",
+        mode=spec.mode,
+        solver=plan.solver,
+        phases=phases,
+        target_time=trial.time,
+        time_unit=trial.time_unit,
+        opened_state_hash=committed.state_hash,
+        trial_state_hash=trial.state_hash,
+        final_state_hash=committed.state_hash,
+        acceptance=acceptance,
+        diagnostics=diagnostics,
+    )
+
+
+def _solve_diagnostic(exc: Exception, step_index: int) -> Diagnostic:
+    return Diagnostic(
+        code="SOLVE_FAILED",
+        message=str(exc),
+        path=("solver",),
+        step_index=step_index,
+        source="solver",
+        backend_error=f"{type(exc).__name__}: {exc}",
+    )
+
+
+def _finite_payload(field_state: dict[str, Any]) -> dict[str, Any]:
+    return {"fields": tuple(sorted(field_state))}
 
 
 def _target_time(plan: RunPlan, step: int) -> float | None:

@@ -72,7 +72,7 @@ def solve_spec(spec: ProblemSpec, out: str, overwrite: bool = False) -> CommandR
         artifacts.update({name: _artifact(path) for name, path in build.artifacts.items()})
         discrete_path = _write_discrete_artifact(build_discrete_plan(spec, build.metadata), run_dir)
         artifacts["discrete_plan"] = _artifact(discrete_path)
-        result = execute_solve(spec, plan, run_dir)
+        result = execute_solve(spec, plan, build.metadata, run_dir)
         artifacts.update({name: _artifact(path) for name, path in result.artifacts.items()})
         diagnostics = result.diagnostics
         state = result.state
