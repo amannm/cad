@@ -1,0 +1,74 @@
+flowchart LR
+    U([Config])
+    UNITS["Units + coordinate frame"]
+    TAGS["Tag registry\nphysical group schema"]
+    CQ["CadQuery\nbuild CAD"]
+    GM["Gmsh\nphysical groups + meshing"]
+    VAL["Validate geometry, tags, mesh quality"]
+    IM["Import\nGmsh → DOLFINx"]
+    FS["Spaces & measures"]
+    MDB["MatDB\ntag → params"]
+    CF["Coeff-field builder"]
+    LOADS["Load/source spec"]
+    BCS["BC spec"]
+    BCB["BC builder"]
+    PHYS["UFL model\nlinear steady"]
+    ASSY["Assemble + apply BCs"]
+    KSP["PETSc KSP solve"]
+    POST["Postprocess\nderived fields, probes, reactions"]
+    OUT["Outputs\nsolution, mesh, metadata, diagnostics"]
+
+%% Global validation metadata
+    U -- units --> UNITS
+    U -- tag_schema --> TAGS
+    UNITS -- scale/frame rules --> CQ
+    UNITS -- unit checks --> MDB
+    TAGS -- expected cell/facet groups --> GM
+
+%% Geometry + mesh
+    U -- geom_params --> CQ
+    U -- mesh_params --> GM
+    CQ -- cad_model --> GM
+    GM -- "gmsh_mesh, cell_groups, facet_groups" --> VAL
+    TAGS -- required tags --> VAL
+    UNITS -- coordinate scale --> VAL
+    VAL -- "validated gmsh_mesh, groups" --> IM
+    IM -- "mesh, cell_tags, facet_tags" --> FS
+
+%% Spaces + measures
+    U -- space_spec --> FS
+    TAGS -- measure/tag names --> FS
+
+%% Materials / coefficients
+    U -- mat_map --> MDB
+    TAGS -- cell tag validation --> MDB
+    MDB -- mat_spec --> CF
+    IM -- "mesh, cell_tags" --> CF
+    CF -- coeff_fields --> PHYS
+
+%% Loads and boundary conditions
+    U -- load_map --> LOADS
+    U -- bc_map --> BCS
+    TAGS -- facet tag validation --> LOADS
+    TAGS -- facet tag validation --> BCS
+    LOADS -- "body_sources, tractions, fluxes, robin_terms" --> PHYS
+    BCS -- bc_spec --> BCB
+    IM -- "mesh, facet_tags" --> BCB
+    FS -- V --> BCB
+    BCB -- natural_terms --> PHYS
+
+%% Physics + forms
+    U -- phys_spec --> PHYS
+    FS -- "V, u, v, dx, ds" --> PHYS
+    PHYS -- "a(u,v), L(v)" --> ASSY
+    BCB -- dirichlet_bcs --> ASSY
+    ASSY -- "A_bc, b_bc" --> KSP
+    U -- solver_params --> KSP
+
+%% Results
+    KSP -- "u_sol, solve_info" --> POST
+    FS -- "V, measures" --> POST
+    POST -- "derived_fields, integrals, reactions" --> OUT
+    KSP -- diagnostics --> OUT
+    U -- "config hash, provenance" --> OUT
+    IM -- "mesh, tags" --> OUT
