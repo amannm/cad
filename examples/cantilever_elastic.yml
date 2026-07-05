@@ -1,0 +1,61 @@
+name: cantilever_elastic
+mode: linear_steady
+units:
+  system: SI
+geometry:
+  backend: gmsh_occ
+  entities:
+    - type: box
+      name: body
+      size: ["0.10 m", "0.02 m", "0.02 m"]
+tags:
+  materials:
+    steel:
+      dim: 3
+      entities: [body]
+  boundaries:
+    fixed_left:
+      dim: 2
+      selector: "x == 0"
+    loaded_right:
+      dim: 2
+      selector: "x == 0.10 m"
+fields:
+  - name: u
+    kind: vector
+    components: 3
+    unit: m
+    element:
+      family: Lagrange
+      order: 1
+materials:
+  steel:
+    model: linear_elastic_small_strain
+    parameters:
+      E: 200 GPa
+      nu: 0.3
+boundary_conditions:
+  - name: fixed_left
+    on: fixed_left
+    field: u
+    type: dirichlet
+    value: ["0 m", "0 m", "0 m"]
+loads:
+  - name: tip_load
+    on: loaded_right
+    field: u
+    type: traction
+    value: ["0 N/m^2", "0 N/m^2", "-1e6 N/m^2"]
+mesh:
+  cell_type: tetrahedron
+  order: 1
+  size:
+    global: 0.02 m
+solver:
+  linear:
+    ksp_type: preonly
+    pc_type: lu
+output:
+  format: vtx
+  fields: [u]
+  cadence: end

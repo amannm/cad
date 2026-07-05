@@ -56,6 +56,13 @@ class ThermoelasticMaterialTerm:
     physical_id: int
 
 
+@dataclass(frozen=True)
+class ElasticMaterialTerm:
+    E: float
+    nu: float
+    physical_id: int
+
+
 @dataclass
 class TransientScalarHeatContext:
     domain: Any
@@ -174,11 +181,19 @@ class StepController:
 
     def _solve_step(self, trial: SolutionState) -> StepSolve:
         if self.spec.mode == "linear_steady":
-            field = _single_scalar_field(self.spec)
-            material_terms = _material_terms(self.spec, self.mesh)
-            if not material_terms:
-                raise ValueError("linear scalar solve requires at least one isotropic_heat material")
-            return _solve_linear_scalar(self.spec, self.plan, self.mesh, self.run_dir, trial, field, material_terms)
+            scalar_field = _single_scalar_field_name(self.spec)
+            if scalar_field is not None:
+                material_terms = _material_terms(self.spec, self.mesh)
+                if not material_terms:
+                    raise ValueError("linear scalar solve requires at least one isotropic_heat material")
+                return _solve_linear_scalar(self.spec, self.plan, self.mesh, self.run_dir, trial, scalar_field, material_terms)
+            displacement_field = _single_displacement_field(self.spec, self.mesh.dimension)
+            if displacement_field is not None:
+                material_terms = _elastic_material_terms(self.spec, self.mesh)
+                if not material_terms:
+                    raise ValueError("linear elastic solve requires at least one linear_elastic_small_strain material")
+                return _solve_linear_elastic(self.spec, self.plan, self.mesh, self.run_dir, trial, displacement_field, material_terms)
+            raise NotImplementedError("linear steady backend requires one scalar temperature field or one displacement field")
         if self.spec.mode == "linear_transient":
             field = _single_scalar_field(self.spec)
             return self._solve_linear_transient_scalar(trial, field)
@@ -479,6 +494,61 @@ def _solve_linear_scalar(
     return StepSolve(field_state=field_state, artifacts=artifacts, payload=payload)
 
 
+def _solve_linear_elastic(
+    spec: ProblemSpec,
+    plan: RunPlan,
+    mesh: MeshMetadata,
+    run_dir: Path,
+    trial: SolutionState,
+    field_name: str,
+    material_terms: tuple[ElasticMaterialTerm, ...],
+) -> StepSolve:
+    started = perf_counter()
+    field = _field(spec, field_name)
+    mesh_data = gmshio.read_from_msh(mesh.path, MPI.COMM_WORLD, rank=0, gdim=mesh.dimension)
+    domain = mesh_data.mesh
+    cell_tags = mesh_data.cell_tags
+    facet_tags = mesh_data.facet_tags
+    V = fem.functionspace(domain, (field.element.family, field.element.order, (field.components,)))
+    u = ufl.TrialFunction(V)
+    v = ufl.TestFunction(V)
+    dx = ufl.Measure("dx", domain=domain, subdomain_data=cell_tags)
+    ds = ufl.Measure("ds", domain=domain, subdomain_data=facet_tags)
+    strains = ufl.sym(ufl.grad(u))
+    test_strains = ufl.sym(ufl.grad(v))
+    identity = ufl.Identity(mesh.dimension)
+    a_terms = []
+    for material in material_terms:
+        lam = material.E * material.nu / ((1.0 + material.nu) * (1.0 - 2.0 * material.nu))
+        mu = material.E / (2.0 * (1.0 + material.nu))
+        stress = 2.0 * mu * strains + lam * ufl.tr(strains) * identity
+        a_terms.append(ufl.inner(stress, test_strains) * dx(material.physical_id))
+    a = _sum_forms(a_terms)
+    L_terms = _elastic_load_forms(spec, mesh, field_name, v, dx, ds)
+    L = _sum_forms(L_terms) if L_terms else 0.0 * ufl.inner(ufl.as_vector((0.0,) * mesh.dimension), v) * dx
+    bcs = _vector_dirichlet_bcs(spec, mesh, V, facet_tags, field_name, field.components)
+    options = dict(spec.solver.linear)
+    options["ksp_error_if_not_converged"] = True
+    problem = LinearProblem(a, L, bcs=bcs, petsc_options_prefix=_petsc_prefix(spec), petsc_options=options)
+    uh = problem.solve()
+    uh.name = field_name
+    reason = int(problem.solver.getConvergedReason())
+    iterations = int(problem.solver.getIterationNumber())
+    norm = float(problem.solver.getResidualNorm())
+    if reason <= 0:
+        raise RuntimeError(f"PETSc KSP did not converge: {reason}")
+    _assert_finite(uh)
+    field_state = {field_name: _field_summary(domain, uh)}
+    artifacts: dict[str, Path] = {}
+    if spec.output.format == "vtx" and trial.committed_step + 1 in plan.output_steps:
+        output_path = run_dir / "fields" / f"{field_name}.bp"
+        with VTXWriter(domain.comm, output_path, [uh]) as writer:
+            writer.write(float(trial.time or 0.0))
+        artifacts[f"solution_{field_name}"] = output_path
+    payload = {"reason": reason, "iterations": iterations, "residual_norm": norm, "elapsed_seconds": perf_counter() - started}
+    return StepSolve(field_state=field_state, artifacts=artifacts, payload=payload)
+
+
 def _thermoelastic_residual(
     spec: ProblemSpec,
     plan: RunPlan,
@@ -521,9 +591,23 @@ def _thermoelastic_residual(
 
 
 def _single_scalar_field(spec: ProblemSpec) -> str:
+    field = _single_scalar_field_name(spec)
+    if field is None:
+        raise NotImplementedError("linear scalar backend requires exactly one scalar field")
+    return field
+
+
+def _single_scalar_field_name(spec: ProblemSpec) -> str | None:
     fields = tuple(field for field in spec.fields if field.kind == "scalar")
     if len(fields) != 1 or len(spec.fields) != 1:
-        raise NotImplementedError("linear scalar backend requires exactly one scalar field")
+        return None
+    return fields[0].name
+
+
+def _single_displacement_field(spec: ProblemSpec, dimension: int) -> str | None:
+    fields = tuple(field for field in spec.fields if field.kind == "vector" and field.unit.dimension == "[length]" and field.components == dimension)
+    if len(fields) != 1 or len(spec.fields) != 1:
+        return None
     return fields[0].name
 
 
@@ -536,9 +620,13 @@ def _thermoelastic_field_names(spec: ProblemSpec) -> tuple[str, str]:
 
 
 def _field_order(spec: ProblemSpec, field_name: str) -> int:
+    return _field(spec, field_name).element.order
+
+
+def _field(spec: ProblemSpec, field_name: str) -> Any:
     for field in spec.fields:
         if field.name == field_name:
-            return field.element.order
+            return field
     raise KeyError(field_name)
 
 
@@ -589,6 +677,22 @@ def _thermoelastic_material_terms(spec: ProblemSpec, mesh: MeshMetadata) -> tupl
     return tuple(terms)
 
 
+def _elastic_material_terms(spec: ProblemSpec, mesh: MeshMetadata) -> tuple[ElasticMaterialTerm, ...]:
+    terms: list[ElasticMaterialTerm] = []
+    for name, material in sorted(spec.materials.items()):
+        if material.model != "linear_elastic_small_strain":
+            raise NotImplementedError(f"linear elastic backend does not implement material model {material.model}")
+        binding = _binding(mesh, "materials", name)
+        terms.append(
+            ElasticMaterialTerm(
+                E=_quantity_scalar(material.parameters["E"]),
+                nu=_quantity_scalar(material.parameters["nu"]),
+                physical_id=binding.physical_id,
+            )
+        )
+    return tuple(terms)
+
+
 def _load_forms(spec: ProblemSpec, mesh: MeshMetadata, v: Any, dx: Any, ds: Any) -> list[Any]:
     forms: list[Any] = []
     for load in spec.loads:
@@ -600,6 +704,22 @@ def _load_forms(spec: ProblemSpec, mesh: MeshMetadata, v: Any, dx: Any, ds: Any)
             forms.append(value * v * ds(binding.physical_id))
         else:
             raise NotImplementedError(f"linear scalar backend does not implement load type {load.type}")
+    return forms
+
+
+def _elastic_load_forms(spec: ProblemSpec, mesh: MeshMetadata, field_name: str, v: Any, dx: Any, ds: Any) -> list[Any]:
+    forms: list[Any] = []
+    for load in spec.loads:
+        if load.field != field_name:
+            raise NotImplementedError(f"linear elastic backend does not implement load '{load.name}' for field '{load.field}'")
+        binding = _binding_by_name(mesh, load.on)
+        value = ufl.as_vector(_quantity_vector(load.value, mesh.dimension))
+        if load.type == "body_force":
+            forms.append(ufl.inner(value, v) * dx(binding.physical_id))
+        elif load.type == "traction":
+            forms.append(ufl.inner(value, v) * ds(binding.physical_id))
+        else:
+            raise NotImplementedError(f"linear elastic backend does not implement load type {load.type}")
     return forms
 
 
@@ -628,6 +748,21 @@ def _dirichlet_bcs(spec: ProblemSpec, mesh: MeshMetadata, V: Any, facet_tags: An
         facets = facet_tags.find(binding.physical_id)
         dofs = fem.locate_dofs_topological(V=V, entity_dim=binding.dim, entities=facets)
         bcs.append(fem.dirichletbc(value=scalar_type(_quantity_scalar(bc.value)), dofs=dofs, V=V))
+    return bcs
+
+
+def _vector_dirichlet_bcs(spec: ProblemSpec, mesh: MeshMetadata, V: Any, facet_tags: Any, field_name: str, components: int) -> list[Any]:
+    bcs: list[Any] = []
+    for bc in spec.bcs:
+        if bc.field != field_name:
+            raise NotImplementedError(f"linear elastic backend does not implement boundary condition '{bc.name}' for field '{bc.field}'")
+        if bc.type != "dirichlet":
+            raise NotImplementedError(f"linear elastic backend does not implement boundary condition type {bc.type}")
+        binding = _binding_by_name(mesh, bc.on)
+        facets = facet_tags.find(binding.physical_id)
+        dofs = fem.locate_dofs_topological(V=V, entity_dim=binding.dim, entities=facets)
+        value = np.asarray(_quantity_vector(bc.value, components), dtype=PETSc.ScalarType)
+        bcs.append(fem.dirichletbc(value=value, dofs=dofs, V=V))
     return bcs
 
 
@@ -719,6 +854,13 @@ def _quantity_magnitude(value: Any) -> float | tuple[float, ...]:
     if isinstance(magnitude, list | tuple):
         return tuple(float(item) for item in magnitude)
     return float(magnitude)
+
+
+def _quantity_vector(value: Any, components: int) -> tuple[float, ...]:
+    magnitude = _quantity_magnitude(value)
+    if not isinstance(magnitude, tuple) or len(magnitude) != components:
+        raise TypeError(f"expected {components}-component canonical vector quantity")
+    return magnitude
 
 
 def _initial_scalar(spec: ProblemSpec, field_name: str) -> float:

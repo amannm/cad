@@ -17,6 +17,9 @@ HEAT_FLUX = dimension_of("W/m^2")
 DENSITY = dimension_of("kg/m^3")
 HEAT_CAPACITY = dimension_of("J/(kg*K)")
 INV_TEMPERATURE = dimension_of("1/K")
+HEAT_SOURCE = dimension_of("W/m^3")
+TRACTION = dimension_of("N/m^2")
+BODY_FORCE = dimension_of("N/m^3")
 
 
 @dataclass(frozen=True)
@@ -26,6 +29,7 @@ class ParameterRule:
     positive: bool = False
     lower_open: float | None = None
     upper_open: float | None = None
+    components: int | None = None
 
 
 @dataclass(frozen=True)
@@ -56,7 +60,7 @@ MATERIAL_CONTRACTS: dict[str, MaterialContract] = {
             "cp": ParameterRule(HEAT_CAPACITY, required=False, positive=True),
         },
         required_fields=("displacement", "temperature"),
-        modes=("linear_steady", "linear_transient", "nonlinear_steady", "nonlinear_transient"),
+        modes=("nonlinear_steady", "nonlinear_transient"),
     ),
     "linear_elastic_small_strain": MaterialContract(
         parameters={
@@ -65,7 +69,7 @@ MATERIAL_CONTRACTS: dict[str, MaterialContract] = {
             "rho": ParameterRule(DENSITY, required=False, positive=True),
         },
         required_fields=("displacement",),
-        modes=("linear_steady", "linear_transient"),
+        modes=("linear_steady",),
     ),
 }
 
@@ -212,6 +216,8 @@ def _bc_diagnostics(spec: ProblemSpec) -> list[Diagnostic]:
 def _load_diagnostics(spec: ProblemSpec, field_roles: dict[str, tuple[str, ...]]) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
     temperature_fields = set(field_roles.get("temperature", ()))
+    displacement_fields = set(field_roles.get("displacement", ()))
+    field_components = {field.name: field.components for field in spec.fields}
     for index, load in enumerate(spec.loads):
         path = ("loads", index)
         if load.type not in {"source", "flux", "body_force", "traction"}:
@@ -233,13 +239,27 @@ def _load_diagnostics(spec: ProblemSpec, field_roles: dict[str, tuple[str, ...]]
                 )
             )
             continue
+        rule = None
+        subject = None
         if load.type == "flux" and load.field in temperature_fields:
+            rule = ParameterRule(HEAT_FLUX)
+            subject = f"Heat flux load '{load.name}'"
+        if load.type == "source" and load.field in temperature_fields:
+            rule = ParameterRule(HEAT_SOURCE)
+            subject = f"Heat source load '{load.name}'"
+        if load.type == "traction" and load.field in displacement_fields:
+            rule = ParameterRule(TRACTION, components=field_components[load.field])
+            subject = f"Traction load '{load.name}'"
+        if load.type == "body_force" and load.field in displacement_fields:
+            rule = ParameterRule(BODY_FORCE, components=field_components[load.field])
+            subject = f"Body force load '{load.name}'"
+        if rule is not None and subject is not None:
             diagnostics.extend(
                 _quantity_rule_diagnostics(
                     load.value,
-                    ParameterRule(HEAT_FLUX),
+                    rule,
                     (*path, "value"),
-                    f"Heat flux load '{load.name}'",
+                    subject,
                 )
             )
     return diagnostics
@@ -267,6 +287,37 @@ def _quantity_rule_diagnostics(value: Any, rule: ParameterRule, path: tuple[str 
                 source="physics",
             )
         )
+    if isinstance(magnitude, list | tuple):
+        if rule.components is None:
+            diagnostics.append(
+                Diagnostic(
+                    code="PHYSICS_PARAMETER_SCALAR_REQUIRED",
+                    message=f"{subject} must be a finite scalar.",
+                    path=path,
+                    source="physics",
+                )
+            )
+            return diagnostics
+        if len(magnitude) != rule.components or any(not isinstance(item, int | float) or isinstance(item, bool) or not math.isfinite(float(item)) for item in magnitude):
+            diagnostics.append(
+                Diagnostic(
+                    code="PHYSICS_PARAMETER_VECTOR_REQUIRED",
+                    message=f"{subject} must be a finite {rule.components}-component vector.",
+                    path=path,
+                    source="physics",
+                )
+            )
+        return diagnostics
+    if rule.components is not None:
+        diagnostics.append(
+            Diagnostic(
+                code="PHYSICS_PARAMETER_VECTOR_REQUIRED",
+                message=f"{subject} must be a finite {rule.components}-component vector.",
+                path=path,
+                source="physics",
+            )
+        )
+        return diagnostics
     if not isinstance(magnitude, int | float) or isinstance(magnitude, bool) or not math.isfinite(float(magnitude)):
         diagnostics.append(
             Diagnostic(
