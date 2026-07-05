@@ -1,5 +1,6 @@
 # Project objectives
-- A compact CAD system with minimal dependencies and multiphysics simulation support.
+- A CAD system with multiphysics simulation support.
+- Compact design and with minimal dependencies.
 - Support for the following solver modes:
   - Linear Steady
   - Linear Transient
@@ -7,10 +8,8 @@
   - Non-linear Transient
 
 # Non-goals
-- Do not worry about backwards compatibility with anything.
-- Do not include fallback/resilience features.
-- Do not include human ergonomics or convenience features.
-- Do not include user extensibility features.
+- Do not include backwards compatibility, fallback behavior, resilience features.
+- Do not include user ergonomics, convenience, extensibility features.
 - Do not focus on testing at this time.
 
 # Reference material (symlinked)
