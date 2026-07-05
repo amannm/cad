@@ -1,101 +1,118 @@
 flowchart LR
     U([Config])
     CFG["Config parser + schema validation\nunits, dimensions, time, required sections"]
+    SPEC["ProblemSpec IR\ncanonical, hashable, versioned"]
     UNITS["Units + coordinate frame\ncanonical scale"]
-    TAGS["Semantic tag registry\nname, dim, id, role"]
-    TIME["Time integrator backend\ncustom loop or PETSc TS/TSAdapt"]
-    CACHE["Artifact cache + provenance\nCAD, mesh, form, operator hashes"]
-    CQ["CadQuery\nbuild CAD"]
-    GM["Gmsh\nphysical names + mesh fields"]
-    VAL["Validate geometry, tags, mesh quality"]
+    TAGS["Semantic tag registry\nname, dim, id, role, coverage rules"]
+    TIME["Time policy\nscheme, dt limits, output cadence, adaptivity"]
+    CACHE["Artifact cache + provenance\nspec, CAD, mesh, form, operator hashes"]
+
+    CQ["CadQuery geometry builder"]
+    GEOCHK["Geometry validator\norientation, watertightness, scale, named entities"]
+    GM["Gmsh mesher\nphysical groups + mesh size fields"]
+    TAGMAP["Tag reconciliation\nsemantic tags ↔ gmsh physical groups"]
+    MESHVAL["Mesh/topology validator\ncoverage, quality, MPI partition sanity"]
     IM["Mesh adapter\nGmsh → DOLFINx MeshData"]
+
     FS["Field/space registry\nscalar, vector, mixed blocks; measures"]
-    MDB["Material DB\ntag/name → normalized params"]
-    CF["Coefficient/constant builder\nstatic + time-dependent fields"]
-    LOADS["Load/source builder\ntime-aware functions"]
-    BCS["BC builder\ntime-aware Dirichlet + weak terms"]
-    IC["Initial condition builder\nproject/interpolate/import restart"]
-    STATE["State/history manager\nu_n, u_{n-1}, restart, output state"]
-    PHYS["UFL transient form factory\nsemi-discrete templates"]
-    STEP["Step form instantiation\nscheme, t, dt, history"]
-    OPcache["Operator/preconditioner cache\nreuse matrix/PC when unchanged"]
-    ASSY["Assemble + lift/apply BCs"]
+    DOFPLAN["DOF/block layout plan\nfield ordering, index sets, nullspace hints"]
+    MDB["Material DB\nsemantic region → normalized params"]
+    CF["Coefficient manager\nstatic + time-dependent fields"]
+    LOADS["Load/source manager\ntime-aware functions"]
+    BCS["Constraint/BC manager\ntime-aware strong + weak terms"]
+    IC["Initial/restart builder\nproject/interpolate/import restart"]
+    STATE["State/history store\nu_n, u_{n-1}, checkpoints, output state"]
+
+    PHYS["UFL transient form factory\nmass/stiffness/source templates"]
+    STEPCTX["Step context\nscheme, t, dt, history, coefficients"]
+    FORMCHK["Form validation\narity, units, block shape, BC consistency"]
+    FORMCOMPILE["Compiled-form cache\nUFL/FFCx/dolfinx forms"]
+    OPCACHE["Operator/preconditioner cache\nM/K/A/P signatures; reuse policy"]
+    ASSY["Assemble step system\nzero/reuse matrices; lift/apply BCs"]
+    LINSYS["Step linear system\nA_step, b_step, P_step"]
     KSP["PETSc KSP/PC solve\noptions prefix + monitors"]
-    ERR["Step quality checks\nresidual, invariants, error estimate"]
-    ADV["Advance state\naccept/reject, adapt dt"]
+    ERR["Step acceptance checks\nresidual, invariants, estimator"]
+    ADV["Advance controller\naccept/reject, rollback, adapt dt"]
+
+    OBS["Diagnostics/observability bus\nlogs, timings, PETSc reasons, provenance"]
     POST["Postprocess\nderived fields, probes, integrals"]
-    IO["Output manager\ncheckpoint cadence vs visualization cadence"]
-    OUT["Outputs\ncheckpoints, time series, diagnostics"]
+    IO["Output manager\nrestart checkpoints vs visualization cadence"]
+    OUT["Outputs\ncheckpoints, time series, metadata, diagnostics"]
 
-%% Config and front-end
-    U --> CFG
-    CFG --> UNITS
-    CFG --> TAGS
-    CFG -- time spec + adaptivity policy --> TIME
-    CFG -- normalized hashable config --> CACHE
-    CFG -- geometry params --> CQ
-    CFG -- mesh params --> GM
-    CFG -- field/space spec --> FS
-    CFG -- material/load/BC/physics/solver specs --> PHYS
+    U --> CFG --> SPEC
+    SPEC --> UNITS
+    SPEC --> TAGS
+    SPEC -- time spec + adaptivity policy --> TIME
+    SPEC --> CACHE
+    SPEC -- geometry params --> CQ
+    SPEC -- mesh params --> GM
+    SPEC -- field/material/load/BC/physics/solver specs --> PHYS
 
-%% Geometry + mesh
-    UNITS -- scale/frame rules --> CQ
-    CQ -- CAD model --> CACHE
-    CQ -- CAD model --> GM
-    TAGS -- required physical groups --> GM
-    GM -- gmsh mesh + physical names --> VAL
-    TAGS -- semantic schema --> VAL
-    UNITS -- coordinate scale --> VAL
-    VAL -- validated mesh + groups --> IM
-    IM -- mesh, cell/facet tags, physical_groups --> FS
-    IM -- mesh artifacts --> CACHE
+    UNITS --> CQ
+    CQ --> GEOCHK
+    GEOCHK --> CACHE
+    GEOCHK --> GM
+    TAGS --> TAGMAP
+    GM --> TAGMAP
+    TAGMAP --> MESHVAL
+    UNITS --> MESHVAL
+    MESHVAL --> IM
+    IM --> CACHE
 
-%% Coefficients, loads, BCs, ICs
-    TAGS -- measure/tag names --> FS
-    UNITS -- unit checks --> MDB
-    TAGS -- cell tag validation --> MDB
-    MDB -- normalized material specs --> CF
-    IM -- mesh + tags --> CF
-    FS -- spaces --> IC
-    CFG -- ic/restart spec --> IC
-    IC -- initial state --> STATE
-    CFG -- load specs --> LOADS
-    CFG -- BC specs --> BCS
+    IM --> FS
+    TAGS --> FS
+    FS --> DOFPLAN
+    SPEC -- material map --> MDB
+    UNITS --> MDB
+    TAGS --> MDB
+    MDB --> CF
+    IM --> CF
+    FS --> IC
+    SPEC -- ic/restart spec --> IC
+    IC --> STATE
+    SPEC --> LOADS
+    SPEC --> BCS
     TIME -- t, dt --> CF
     TIME -- t, dt --> LOADS
     TIME -- t, dt --> BCS
-    TAGS -- semantic lookup --> LOADS
-    TAGS -- semantic lookup --> BCS
-    IM -- mesh + tags --> LOADS
-    IM -- mesh + tags --> BCS
-    FS -- spaces + measures --> LOADS
-    FS -- spaces + measures --> BCS
+    TAGS --> LOADS
+    TAGS --> BCS
+    IM --> LOADS
+    IM --> BCS
+    FS --> LOADS
+    FS --> BCS
 
-%% Time loop
-    TIME -- t, dt, step_id --> STATE
-    STATE -- history/restart data --> STEP
-    FS -- trial/test/block spaces + measures --> PHYS
-    CF -- coefficients/constants --> PHYS
-    LOADS -- body/natural terms(t) --> STEP
-    BCS -- weak terms(t) --> STEP
-    PHYS -- semi-discrete form templates --> STEP
-    STEP -- a_step, L_step, operator signature --> OPcache
-    OPcache -- cached A/PC if signature unchanged --> KSP
-    OPcache -- assembly required --> ASSY
-    BCS -- Dirichlet BCs(t) --> ASSY
-    ASSY -- A_bc, b_bc --> KSP
-    CFG -- PETSc options --> KSP
+    TIME -- t, dt, step_id --> STEPCTX
+    STATE -- history/restart data --> STEPCTX
+    FS -- spaces + measures --> PHYS
+    CF -- coefficients(t) --> STEPCTX
+    LOADS -- terms(t) --> STEPCTX
+    BCS -- weak terms(t) --> STEPCTX
+    PHYS -- semi-discrete templates --> STEPCTX
+    STEPCTX -- step forms --> FORMCHK
+    FORMCHK --> FORMCOMPILE
+    FORMCOMPILE -- compiled forms + signatures --> OPCACHE
+    DOFPLAN --> OPCACHE
+    OPCACHE -- cached operator/PC if unchanged --> LINSYS
+    OPCACHE -- assembly required --> ASSY
+    BCS -- strong constraints(t) --> ASSY
+    ASSY --> LINSYS
+    LINSYS --> KSP
+    SPEC -- PETSc options --> KSP
     KSP -- u_{n+1}, solve_info --> ERR
     ERR -- accepted/rejected + suggested_dt --> ADV
     ADV -- committed state --> STATE
+    ADV -- rollback rejected state --> STATE
     ADV -- dt feedback --> TIME
 
-%% Results
     STATE -- output-time states --> POST
-    FS -- spaces + measures --> POST
-    POST -- derived fields + integrals --> IO
+    FS --> POST
+    POST --> IO
     STATE -- restart checkpoints --> IO
-    IO -- files + metadata --> OUT
-    ADV -- failures/timing/adaptivity --> OUT
-    CACHE -- provenance hashes --> OUT
-    IM -- mesh + tags --> OUT
+    KSP --> OBS
+    ERR --> OBS
+    ADV --> OBS
+    CACHE --> OBS
+    IO --> OUT
+    OBS --> OUT
+    IM --> OUT

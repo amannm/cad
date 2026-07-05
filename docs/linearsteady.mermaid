@@ -1,87 +1,98 @@
 flowchart LR
     U([Config])
     CFG["Config parser + schema validation\nunits, dimensions, required sections"]
+    SPEC["ProblemSpec IR\ncanonical, hashable, versioned"]
     UNITS["Units + coordinate frame\ncanonical scale"]
-    TAGS["Semantic tag registry\nname, dim, id, role"]
-    CACHE["Artifact cache + provenance\nCAD hash, mesh hash, form hash"]
-    CQ["CadQuery\nbuild CAD"]
-    GM["Gmsh\nphysical names + mesh fields"]
-    VAL["Validate geometry, tags, mesh quality\ndim/id uniqueness, required groups"]
-    IM["Mesh adapter\nGmsh → DOLFINx MeshData"]
+    TAGS["Semantic tag registry\nname, dim, id, role, coverage rules"]
+    CACHE["Artifact cache + provenance\nspec, CAD, mesh, form, operator hashes"]
+
+    CQ["CadQuery geometry builder\nparameterized solids/surfaces"]
+    GEOCHK["Geometry validator\norientation, watertightness, scale, named entities"]
+    GM["Gmsh mesher\nphysical groups + mesh size fields"]
+    TAGMAP["Tag reconciliation\nsemantic tags ↔ gmsh physical groups"]
+    MESHVAL["Mesh/topology validator\ncell/facet coverage, quality, MPI partition sanity"]
+    IM["Mesh adapter\nGmsh → DOLFINx MeshData\nmesh + cell/facet/edge/vertex tags"]
+
     FS["Field/space registry\nscalar, vector, mixed blocks; measures"]
-    MDB["Material DB\ntag/name → normalized params"]
-    CF["Coefficient/constant builder\ncell-wise, facet-wise, time-independent"]
+    DOFPLAN["DOF/block layout plan\nfield ordering, index sets, nullspace hints"]
+    MDB["Material DB\nsemantic region → normalized params"]
+    CF["Coefficient/constant builder\ncell-wise/facet-wise immutable data"]
     LOADS["Load/source builder\nsemantic facets/cells"]
-    BCS["BC builder\nDirichlet + weak BC terms"]
-    PHYS["UFL form factory\nlinear steady blocks"]
-    ASMPLAN["Assembly plan\nreuse constants/coefficients; block layout"]
-    ASSY["Assemble + lift/apply BCs"]
-    LINSYS["Linear system package\nA, b, nullspace, near-nullspace"]
+    BCS["Constraint/BC registry\nstrong Dirichlet + weak/natural terms"]
+
+    PHYS["UFL form factory\nlinear steady residual templates"]
+    FORMCHK["Form validation\narity, units, block shape, BC consistency"]
+    FORMCOMPILE["Compiled-form cache\nUFL/FFCx/dolfinx forms"]
+    ASMPLAN["Assembly + preconditioner plan\noperator signature, MatNest/block layout"]
+    ASSY["Assemble operators/vectors\nzero/reuse matrices; lift/apply BCs"]
+    LINSYS["Linear system package\nA, b, P, nullspace, near-nullspace"]
     KSP["PETSc KSP/PC solve\noptions prefix + monitors"]
-    QC["Solution verification\nresidual, conservation, reactions"]
+
+    QC["Solution verification\nresidual, conservation, reactions, invariants"]
+    OBS["Diagnostics/observability bus\nlogs, timings, PETSc reasons, provenance"]
     POST["Postprocess\nderived fields, probes, integrals"]
-    IO["Output manager\ncheckpoint vs visualization"]
+    IO["Output manager\ncheckpoint vs visualization formats"]
     OUT["Outputs\nsolution, mesh, metadata, diagnostics"]
 
-%% Config and semantics
-    U --> CFG
-    CFG -- canonical units --> UNITS
-    CFG -- semantic tags --> TAGS
-    CFG -- hashable normalized config --> CACHE
-    CFG -- geometry params --> CQ
-    CFG -- mesh params --> GM
-    CFG -- space/field spec --> FS
-    CFG -- material map --> MDB
-    CFG -- loads/BCs/physics/solver --> PHYS
+    U --> CFG --> SPEC
+    SPEC --> UNITS
+    SPEC --> TAGS
+    SPEC --> CACHE
+    SPEC -- geometry params --> CQ
+    SPEC -- mesh params --> GM
+    SPEC -- field/material/load/BC/physics/solver specs --> PHYS
 
-%% Geometry + mesh
     UNITS -- scale/frame rules --> CQ
-    CQ -- CAD model --> CACHE
-    CACHE -- cached CAD if valid --> GM
-    CQ -- CAD model --> GM
-    TAGS -- required physical groups --> GM
-    GM -- gmsh mesh + physical names --> VAL
-    TAGS -- semantic schema --> VAL
-    UNITS -- coordinate scale --> VAL
-    VAL -- validated mesh + groups --> IM
-    IM -- mesh, cell/facet tags, physical_groups --> FS
-    IM -- mesh artifacts --> CACHE
+    CQ -- CAD model --> GEOCHK
+    GEOCHK -- validated CAD --> CACHE
+    GEOCHK -- validated CAD --> GM
+    TAGS -- required groups --> TAGMAP
+    GM -- gmsh model + mesh + physical names --> TAGMAP
+    TAGMAP -- semantic mesh groups --> MESHVAL
+    UNITS -- coordinate scale --> MESHVAL
+    MESHVAL -- validated mesh + tags --> IM
+    IM -- MeshData artifacts --> CACHE
 
-%% Fields, materials, loads, BCs
+    IM -- mesh + meshtags + physical_groups --> FS
     TAGS -- measure/tag names --> FS
+    FS --> DOFPLAN
+    DOFPLAN -- block layout + nullspaces --> LINSYS
+    SPEC -- material map --> MDB
     UNITS -- unit checks --> MDB
     TAGS -- cell tag validation --> MDB
     MDB -- normalized material specs --> CF
     IM -- mesh + cell/facet tags --> CF
-    CFG -- load specs --> LOADS
-    CFG -- BC specs --> BCS
-    TAGS -- semantic cell/facet lookup --> LOADS
-    TAGS -- semantic facet lookup --> BCS
+    SPEC -- load specs --> LOADS
+    SPEC -- BC specs --> BCS
+    TAGS -- semantic lookup --> LOADS
+    TAGS -- semantic lookup --> BCS
     IM -- mesh + tags --> LOADS
     IM -- mesh + tags --> BCS
     FS -- spaces + measures --> LOADS
     FS -- spaces + measures --> BCS
 
-%% Problem construction and solve
     FS -- trial/test/block spaces + dx/ds --> PHYS
     CF -- coefficients/constants --> PHYS
     LOADS -- body/natural terms --> PHYS
     BCS -- weak terms --> PHYS
-    PHYS -- a(u,v), L(v) --> ASMPLAN
-    ASMPLAN -- reusable assembly recipe --> ASSY
-    BCS -- Dirichlet BCs --> ASSY
-    ASSY -- A, b --> LINSYS
-    FS -- nullspace hints --> LINSYS
+    PHYS -- residual/bilinear/linear forms --> FORMCHK
+    FORMCHK -- valid forms --> FORMCOMPILE
+    FORMCOMPILE -- compiled forms + signature --> ASMPLAN
+    DOFPLAN -- layout + index sets --> ASMPLAN
+    ASMPLAN -- recipe + reuse policy --> ASSY
+    BCS -- strong constraints --> ASSY
+    ASSY -- A, b, P --> LINSYS
     LINSYS -- configured system --> KSP
-    CFG -- PETSc options --> KSP
+    SPEC -- PETSc options --> KSP
 
-%% Results
     KSP -- solution + solve_info --> QC
-    LINSYS -- A, b --> QC
+    LINSYS -- A, b, P --> QC
     QC -- accepted solution + diagnostics --> POST
+    KSP -- monitors/reasons --> OBS
+    QC -- checks --> OBS
+    CACHE -- provenance hashes --> OBS
     FS -- spaces + measures --> POST
     POST -- derived fields + integrals --> IO
     IO -- checkpoints + visualization files --> OUT
-    CACHE -- provenance hashes --> OUT
+    OBS -- diagnostics --> OUT
     IM -- mesh + tags --> OUT
-    QC -- residuals/reactions/conservation --> OUT

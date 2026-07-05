@@ -1,110 +1,124 @@
 flowchart LR
     U([Config])
     CFG["Config parser + schema validation\nunits, dimensions, time, required sections"]
+    SPEC["ProblemSpec IR\ncanonical, hashable, versioned"]
     UNITS["Units + coordinate frame\ncanonical scale"]
-    TAGS["Semantic tag registry\nname, dim, id, role"]
-    TIME["Time integrator backend\ncustom loop or PETSc TS/TSAdapt"]
-    CACHE["Artifact cache + provenance\nCAD, mesh, form, operator hashes"]
-    CQ["CadQuery\nbuild CAD"]
-    GM["Gmsh\nphysical names + mesh fields"]
-    VAL["Validate geometry, tags, mesh quality"]
+    TAGS["Semantic tag registry\nname, dim, id, role, coverage rules"]
+    TIME["Time policy\nscheme, dt limits, output cadence, adaptivity"]
+    CACHE["Artifact cache + provenance\nspec, CAD, mesh, form, operator hashes"]
+
+    CQ["CadQuery geometry builder"]
+    GEOCHK["Geometry validator\norientation, watertightness, scale, named entities"]
+    GM["Gmsh mesher\nphysical groups + mesh size fields"]
+    TAGMAP["Tag reconciliation\nsemantic tags ↔ gmsh physical groups"]
+    MESHVAL["Mesh/topology validator\ncoverage, quality, MPI partition sanity"]
     IM["Mesh adapter\nGmsh → DOLFINx MeshData"]
+
     FS["Field/space registry\nscalar, vector, mixed blocks; measures"]
-    MDB["Material DB\ntag/name → normalized params"]
-    CF["Coefficient/constant builder\nstatic + time-dependent fields"]
-    MATLIB["Material law registry\nresponse + consistent tangent"]
-    LOADS["Load/source builder\ntime-aware functions"]
-    BCS["BC builder\ntime-aware Dirichlet + weak terms"]
+    DOFPLAN["DOF/block layout plan\nfield ordering, index sets, nullspace hints"]
+    MDB["Material DB\nsemantic region → normalized params"]
+    CF["Coefficient manager\nstatic + time-dependent fields"]
+    MATLIB["Material law registry\nresponse + consistent tangent; state schema"]
+    LOADS["Load/source manager\ntime-aware functions"]
+    BCS["Constraint/BC manager\ntime-aware strong + weak terms"]
     IC["Initial/restart builder\nfields + internal variables"]
-    STATE["State/history manager\nu_n, history, internal vars, restart"]
+    TXNSTATE["Transactional state/history store\nu_n, history, trial internal vars, restart"]
     PRED["Predictor / extrapolator\ninitial guess for u_{n+1}"]
-    PHYS["UFL nonlinear transient form factory\nresidual + Jacobian templates"]
-    STEP["Step residual/Jacobian instantiation\nscheme, t, dt, history"]
-    PROB["Nonlinear problem adapter\nF/J callbacks, BCs, nullspaces"]
+
+    PHYS["UFL nonlinear transient form factory\nresidual + Jacobian + optional P templates"]
+    STEPCTX["Step context\nscheme, t, dt, history, coefficients"]
+    FORMCHK["Form/tangent validation\narity, consistency, block shape, units"]
+    FORMCOMPILE["Compiled-form cache\nresidual/Jacobian/preconditioner"]
+    PROB["Nonlinear problem adapter\nF/J/P callbacks, BCs, nullspaces"]
     SNES["PETSc SNES solve\nline search/trust region + monitors"]
-    ERR["Step convergence + physics checks\nresidual, error, invariants"]
-    ADV["Advance state\ncommit/reject, rollback, adapt dt"]
+    ERR["Step convergence + physics checks\nresidual, estimator, invariants"]
+    ADV["Advance controller\ncommit/reject, rollback, adapt dt"]
+
+    OBS["Diagnostics/observability bus\nlogs, timings, PETSc reasons, provenance"]
     POST["Postprocess\nderived fields, probes, integrals"]
-    IO["Output manager\ncheckpoint cadence vs visualization cadence"]
-    OUT["Outputs\ncheckpoints, time series, diagnostics"]
+    IO["Output manager\nrestart checkpoints vs visualization cadence"]
+    OUT["Outputs\ncheckpoints, time series, metadata, diagnostics"]
 
-%% Config and front-end
-    U --> CFG
-    CFG --> UNITS
-    CFG --> TAGS
-    CFG -- time spec + adaptivity policy --> TIME
-    CFG -- normalized hashable config --> CACHE
-    CFG -- geometry params --> CQ
-    CFG -- mesh params --> GM
-    CFG -- field/material/load/BC/physics/solver specs --> PHYS
+    U --> CFG --> SPEC
+    SPEC --> UNITS
+    SPEC --> TAGS
+    SPEC -- time spec + adaptivity policy --> TIME
+    SPEC --> CACHE
+    SPEC -- geometry params --> CQ
+    SPEC -- mesh params --> GM
+    SPEC -- field/material/load/BC/physics/solver specs --> PHYS
 
-%% Geometry + mesh
-    UNITS -- scale/frame rules --> CQ
-    CQ -- CAD model --> CACHE
-    CQ -- CAD model --> GM
-    TAGS -- required physical groups --> GM
-    GM -- gmsh mesh + physical names --> VAL
-    TAGS -- semantic schema --> VAL
-    UNITS -- coordinate scale --> VAL
-    VAL -- validated mesh + groups --> IM
-    IM -- mesh, cell/facet tags, physical_groups --> FS
-    IM -- mesh artifacts --> CACHE
+    UNITS --> CQ
+    CQ --> GEOCHK
+    GEOCHK --> CACHE
+    GEOCHK --> GM
+    TAGS --> TAGMAP
+    GM --> TAGMAP
+    TAGMAP --> MESHVAL
+    UNITS --> MESHVAL
+    MESHVAL --> IM
+    IM --> CACHE
 
-%% Fields, materials, loads, BCs, ICs
-    CFG -- space spec --> FS
-    TAGS -- measure/tag names --> FS
-    UNITS -- unit checks --> MDB
-    TAGS -- cell tag validation --> MDB
-    MDB -- normalized material specs --> CF
-    CFG -- material law choices --> MATLIB
-    CF -- coefficients/constants --> MATLIB
-    IM -- mesh + tags --> CF
-    CFG -- ic/restart spec --> IC
+    SPEC -- space spec --> FS
+    IM --> FS
+    TAGS --> FS
+    FS --> DOFPLAN
+    SPEC -- material map --> MDB
+    UNITS --> MDB
+    TAGS --> MDB
+    MDB --> CF
+    SPEC -- material law choices --> MATLIB
+    CF --> MATLIB
+    IM --> CF
+    SPEC -- ic/restart spec --> IC
     FS -- spaces + quadrature/state spaces --> IC
-    MATLIB -- initial internal variables --> IC
-    IC -- initial fields + internal vars --> STATE
-    CFG -- load specs --> LOADS
-    CFG -- BC specs --> BCS
+    MATLIB -- initial internal variable schema --> IC
+    IC -- initial fields + internal vars --> TXNSTATE
+    SPEC --> LOADS
+    SPEC --> BCS
     TIME -- t, dt --> CF
     TIME -- t, dt --> LOADS
     TIME -- t, dt --> BCS
-    TAGS -- semantic lookup --> LOADS
-    TAGS -- semantic lookup --> BCS
-    IM -- mesh + tags --> LOADS
-    IM -- mesh + tags --> BCS
-    FS -- spaces + measures --> LOADS
-    FS -- spaces + measures --> BCS
+    TAGS --> LOADS
+    TAGS --> BCS
+    IM --> LOADS
+    IM --> BCS
+    FS --> LOADS
+    FS --> BCS
 
-%% Time + nonlinear solve loop
-    TIME -- t, dt, step_id --> STATE
-    STATE -- committed history/internal vars --> PRED
-    PRED -- u_guess for u_{n+1} --> SNES
+    TIME -- t, dt, step_id --> STEPCTX
+    TXNSTATE -- committed history/internal vars --> PRED
+    PRED -- u_guess --> SNES
     FS -- u, du, v, block spaces, measures --> PHYS
     MATLIB -- response + consistent tangent API --> PHYS
-    STATE -- history + trial internal vars --> STEP
-    CF -- coefficients/constants(t) --> STEP
-    LOADS -- body/natural terms(t) --> STEP
-    BCS -- weak terms(t) --> STEP
-    PHYS -- transient form templates --> STEP
-    STEP -- F_step(u), J_step(u) --> PROB
-    BCS -- Dirichlet BCs(t) --> PROB
-    FS -- nullspace hints --> PROB
+    TXNSTATE -- history + trial vars --> STEPCTX
+    CF -- coefficients(t) --> STEPCTX
+    LOADS -- terms(t) --> STEPCTX
+    BCS -- weak terms(t) --> STEPCTX
+    PHYS -- transient templates --> STEPCTX
+    STEPCTX -- F_step, J_step, optional P_step --> FORMCHK
+    FORMCHK --> FORMCOMPILE
+    FORMCOMPILE --> PROB
+    BCS -- strong constraints(t) --> PROB
+    DOFPLAN -- nullspaces/index sets --> PROB
     PROB -- assemble callbacks --> SNES
-    CFG -- PETSc SNES/KSP/PC options --> SNES
-    SNES -- trial iterate --> STATE
-    STATE -- trial vars --> MATLIB
+    SPEC -- PETSc SNES/KSP/PC options --> SNES
+    SNES -- trial iterate --> TXNSTATE
+    TXNSTATE -- trial vars --> MATLIB
     SNES -- candidate u_{n+1} + solve_info --> ERR
     ERR -- accepted/rejected + suggested_dt --> ADV
-    ADV -- commit accepted fields/internal vars --> STATE
-    ADV -- rollback rejected step --> STATE
+    ADV -- commit accepted fields/internal vars --> TXNSTATE
+    ADV -- rollback rejected step --> TXNSTATE
     ADV -- dt feedback --> TIME
 
-%% Results
-    STATE -- output-time states --> POST
-    FS -- spaces + measures --> POST
-    POST -- derived fields + integrals --> IO
-    STATE -- restart checkpoints --> IO
-    IO -- files + metadata --> OUT
-    ERR -- residuals/failures/timing/adaptivity --> OUT
-    CACHE -- provenance hashes --> OUT
-    IM -- mesh + tags --> OUT
+    TXNSTATE -- output-time states --> POST
+    FS --> POST
+    POST --> IO
+    TXNSTATE -- restart checkpoints --> IO
+    SNES --> OBS
+    ERR --> OBS
+    ADV --> OBS
+    CACHE --> OBS
+    OBS --> OUT
+    IO --> OUT
+    IM --> OUT

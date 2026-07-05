@@ -1,94 +1,107 @@
 flowchart LR
     U([Config])
     CFG["Config parser + schema validation\nunits, dimensions, required sections"]
+    SPEC["ProblemSpec IR\ncanonical, hashable, versioned"]
     UNITS["Units + coordinate frame\ncanonical scale"]
-    TAGS["Semantic tag registry\nname, dim, id, role"]
-    CACHE["Artifact cache + provenance\nCAD, mesh, form, tangent hashes"]
-    CQ["CadQuery\nbuild CAD"]
-    GM["Gmsh\nphysical names + mesh fields"]
-    VAL["Validate geometry, tags, mesh quality"]
+    TAGS["Semantic tag registry\nname, dim, id, role, coverage rules"]
+    CACHE["Artifact cache + provenance\nspec, CAD, mesh, form, tangent hashes"]
+
+    CQ["CadQuery geometry builder"]
+    GEOCHK["Geometry validator\norientation, watertightness, scale, named entities"]
+    GM["Gmsh mesher\nphysical groups + mesh size fields"]
+    TAGMAP["Tag reconciliation\nsemantic tags ↔ gmsh physical groups"]
+    MESHVAL["Mesh/topology validator\ncoverage, quality, MPI partition sanity"]
     IM["Mesh adapter\nGmsh → DOLFINx MeshData"]
+
     FS["Field/space registry\nscalar, vector, mixed blocks; measures"]
-    MDB["Material DB\ntag/name → normalized params"]
+    DOFPLAN["DOF/block layout plan\nfield ordering, index sets, nullspace hints"]
+    MDB["Material DB\nsemantic region → normalized params"]
     CF["Coefficient/constant builder\ncell-wise, facet-wise"]
-    MATLIB["Material law registry\nenergy/residual/tangent; quadrature state"]
-    STATE["State manager\ninternal vars, trial vars, commit/rollback"]
+    MATLIB["Material law registry\nenergy/residual/tangent; quadrature state schema"]
+    TXNSTATE["Transactional state manager\ncommitted/trial internal vars; commit/rollback"]
     LOADS["Load/source builder\nsemantic facets/cells"]
-    BCS["BC builder\nDirichlet + weak BC terms"]
-    PHYS["UFL nonlinear form factory\nresidual + Jacobian"]
-    CONT["Continuation/load stepping\ninitial guess, bounds, homotopy"]
-    PROB["Nonlinear problem adapter\nF/J callbacks, BCs, nullspaces"]
+    BCS["Constraint/BC registry\nstrong Dirichlet + weak/natural terms"]
+
+    PHYS["UFL nonlinear form factory\nresidual + Jacobian + optional P"]
+    FORMCHK["Form/tangent validation\narity, consistency, block shape, units"]
+    FORMCOMPILE["Compiled-form cache\nresidual/Jacobian/preconditioner"]
+    CONT["Continuation/load stepping\nload factor, u0, bounds, homotopy"]
+    PROB["Nonlinear problem adapter\nF/J/P callbacks, BCs, nullspaces"]
     SNES["PETSc SNES solve\nline search/trust region + monitors"]
     CONV["Convergence gate\nresidual, update norm, physics checks"]
+
+    OBS["Diagnostics/observability bus\nlogs, timings, PETSc reasons, provenance"]
     POST["Postprocess\nderived fields, probes, reactions"]
     IO["Output manager\nsolution, state, visualization"]
-    OUT["Outputs\nsolution, metadata, diagnostics"]
+    OUT["Outputs\nsolution, state, metadata, diagnostics"]
 
-%% Config and semantics
-    U --> CFG
-    CFG --> UNITS
-    CFG --> TAGS
-    CFG --> CACHE
-    CFG -- geometry params --> CQ
-    CFG -- mesh params --> GM
-    CFG -- field/material/load/BC/physics/solver specs --> PHYS
+    U --> CFG --> SPEC
+    SPEC --> UNITS
+    SPEC --> TAGS
+    SPEC --> CACHE
+    SPEC -- geometry params --> CQ
+    SPEC -- mesh params --> GM
+    SPEC -- field/material/load/BC/physics/solver specs --> PHYS
 
-%% Geometry + mesh
-    UNITS -- scale/frame rules --> CQ
-    CQ -- CAD model --> CACHE
-    CQ -- CAD model --> GM
-    TAGS -- required physical groups --> GM
-    GM -- gmsh mesh + physical names --> VAL
-    TAGS -- semantic schema --> VAL
-    UNITS -- coordinate scale --> VAL
-    VAL -- validated mesh + groups --> IM
-    IM -- mesh, cell/facet tags, physical_groups --> FS
-    IM -- mesh artifacts --> CACHE
+    UNITS --> CQ
+    CQ --> GEOCHK
+    GEOCHK --> CACHE
+    GEOCHK --> GM
+    TAGS --> TAGMAP
+    GM --> TAGMAP
+    TAGMAP --> MESHVAL
+    UNITS --> MESHVAL
+    MESHVAL --> IM
+    IM --> CACHE
 
-%% Fields, materials, loads, BCs
-    CFG -- space spec --> FS
-    TAGS -- measure/tag names --> FS
-    UNITS -- unit checks --> MDB
-    TAGS -- cell tag validation --> MDB
-    MDB -- normalized material specs --> CF
-    CF -- coefficients/constants --> MATLIB
-    CFG -- material law choices --> MATLIB
-    IM -- mesh + tags --> CF
-    FS -- quadrature/function spaces --> STATE
-    MATLIB -- initial internal vars --> STATE
-    CFG -- load specs --> LOADS
-    CFG -- BC specs --> BCS
-    TAGS -- semantic lookup --> LOADS
-    TAGS -- semantic lookup --> BCS
-    IM -- mesh + tags --> LOADS
-    IM -- mesh + tags --> BCS
-    FS -- spaces + measures --> LOADS
-    FS -- spaces + measures --> BCS
+    SPEC -- space spec --> FS
+    IM --> FS
+    TAGS --> FS
+    FS --> DOFPLAN
+    SPEC -- material map --> MDB
+    UNITS --> MDB
+    TAGS --> MDB
+    MDB --> CF
+    IM --> CF
+    CF --> MATLIB
+    SPEC -- material law choices --> MATLIB
+    FS -- quadrature/function spaces --> TXNSTATE
+    MATLIB -- internal variable schema + initial values --> TXNSTATE
+    SPEC --> LOADS
+    SPEC --> BCS
+    TAGS --> LOADS
+    TAGS --> BCS
+    IM --> LOADS
+    IM --> BCS
+    FS --> LOADS
+    FS --> BCS
 
-%% Nonlinear solve
-    CFG -- continuation params + u0 --> CONT
+    SPEC -- continuation params + u0 --> CONT
     CONT -- current load factor + initial guess --> SNES
     FS -- u, du, v, block spaces, measures --> PHYS
     MATLIB -- response + consistent tangent API --> PHYS
-    STATE -- committed/trial internal vars --> PHYS
+    TXNSTATE -- committed/trial vars --> PHYS
     LOADS -- body/natural terms --> PHYS
-    BCS -- weak terms + Dirichlet BCs --> PHYS
-    PHYS -- F(u;v), J(u;du,v) --> PROB
-    BCS -- Dirichlet BCs --> PROB
-    FS -- nullspace hints --> PROB
+    BCS -- weak terms --> PHYS
+    PHYS -- F, J, optional P --> FORMCHK
+    FORMCHK --> FORMCOMPILE
+    FORMCOMPILE --> PROB
+    BCS -- strong constraints --> PROB
+    DOFPLAN -- nullspaces/index sets --> PROB
     PROB -- assemble callbacks --> SNES
-    CFG -- PETSc SNES/KSP/PC options --> SNES
-    SNES -- trial iterate --> STATE
-    STATE -- trial vars --> MATLIB
+    SPEC -- PETSc SNES/KSP/PC options --> SNES
+    SNES -- trial iterate --> TXNSTATE
+    TXNSTATE -- trial vars --> MATLIB
     SNES -- candidate solution + solve_info --> CONV
-    CONV -- accepted solution --> STATE
-    CONV -- failed step / smaller load increment --> CONT
-    STATE -- commit accepted internal vars --> POST
+    CONV -- accepted solution --> TXNSTATE
+    CONV -- failed step / smaller increment --> CONT
+    TXNSTATE -- commit accepted internal vars --> POST
 
-%% Results
-    FS -- spaces + measures --> POST
-    POST -- derived fields, integrals, reactions --> IO
-    IO -- files + metadata --> OUT
-    CONV -- residuals/iterations/convergence reason --> OUT
-    CACHE -- provenance hashes --> OUT
-    IM -- mesh + tags --> OUT
+    FS --> POST
+    POST --> IO
+    IO --> OUT
+    SNES --> OBS
+    CONV --> OBS
+    CACHE --> OBS
+    OBS --> OUT
+    IM --> OUT
