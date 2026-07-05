@@ -13,7 +13,7 @@ CellType = Literal["tetrahedron", "hexahedron", "triangle", "quadrilateral", "in
 FieldKind = Literal["scalar", "vector"]
 EntityType = Literal["box", "cylinder", "boolean_union", "boolean_cut"]
 TagNamespace = Literal["materials", "boundaries", "interfaces", "curves", "points"]
-StepPhase = Literal["open", "predict", "discretize", "update", "build", "solve", "accept", "commit", "fail"]
+StepPhase = Literal["open", "predict", "discretize", "update", "build", "solve", "accept", "commit", "fail", "postprocess", "write"]
 OutputCadence = Annotated[str, Field(pattern=r"^(end|every_step|never|every_[1-9][0-9]*)$")]
 
 
