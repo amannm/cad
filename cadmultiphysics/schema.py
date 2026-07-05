@@ -13,6 +13,7 @@ CellType = Literal["tetrahedron", "hexahedron", "triangle", "quadrilateral", "in
 FieldKind = Literal["scalar", "vector"]
 EntityType = Literal["box", "cylinder"]
 TagNamespace = Literal["materials", "boundaries", "interfaces", "curves", "points"]
+StepPhase = Literal["open", "predict", "discretize", "update", "build", "solve", "accept", "commit", "fail"]
 
 
 class StrictModel(BaseModel):
@@ -349,11 +350,53 @@ class RunPlan(StrictModel):
     solver: Literal["ksp", "snes"]
     steps: int = Field(ge=1)
     time: TimeGrid | None = None
+    output_cadence: str
+    restart_cadence: str | None
+    checkpoint_policy: Literal["manifest_hash"] = "manifest_hash"
+    stop_policy: Literal["fail_closed"] = "fail_closed"
 
 
 class RunArtifact(StrictModel):
     path: str
     sha256: str
+
+
+class SolutionState(StrictModel):
+    schema_version: str
+    content_hash: str
+    mode: Mode
+    fields: tuple[str, ...]
+    committed_step: int = Field(ge=0)
+    trial_step: int | None = Field(default=None, ge=1)
+    time: float | None = None
+    time_unit: str | None = None
+    field_state: dict[str, Any] = Field(default_factory=dict)
+    history_state: dict[str, Any] = Field(default_factory=dict)
+    material_state: dict[str, Any] = Field(default_factory=dict)
+    restart_markers: dict[str, str] = Field(default_factory=dict)
+    state_hash: str = ""
+
+
+class AcceptanceCheck(StrictModel):
+    name: str
+    status: Literal["passed", "failed"]
+    diagnostic: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class StepRecord(StrictModel):
+    index: int = Field(ge=1)
+    status: Literal["accepted", "failed"]
+    mode: Mode
+    solver: Literal["ksp", "snes"]
+    phases: tuple[StepPhase, ...]
+    target_time: float | None = None
+    time_unit: str | None = None
+    opened_state_hash: str
+    trial_state_hash: str
+    final_state_hash: str
+    acceptance: tuple[AcceptanceCheck, ...]
+    diagnostics: tuple[Diagnostic, ...] = ()
 
 
 class RunReport(StrictModel):
@@ -367,6 +410,8 @@ class RunReport(StrictModel):
     manifest: str | None = None
     manifest_hash: str | None = None
     artifacts: dict[str, RunArtifact] = Field(default_factory=dict)
+    state: SolutionState | None = None
+    steps: tuple[StepRecord, ...] = ()
     diagnostics: tuple[Diagnostic, ...] = ()
 
 
@@ -379,4 +424,5 @@ class RestartState(StrictModel):
     fields: tuple[str, ...]
     step_index: int = Field(ge=0)
     time: QuantitySpec | None = None
+    state_hash: str | None = None
     artifacts: dict[str, str] = Field(default_factory=dict)

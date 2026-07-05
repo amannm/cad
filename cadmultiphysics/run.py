@@ -13,7 +13,8 @@ from cadmultiphysics.diagnostics import Diagnostic, schema_diagnostics
 from cadmultiphysics.errors import MeshError
 from cadmultiphysics.io import load_config, write_json
 from cadmultiphysics.mesh import generate_mesh
-from cadmultiphysics.schema import DomainIR, MeshMetadata, ProblemSpec, RestartState, RunArtifact, RunManifest, RunPlan, RunReport
+from cadmultiphysics.schema import DomainIR, MeshMetadata, ProblemSpec, RestartState, RunArtifact, RunManifest, RunPlan, RunReport, SolutionState, StepRecord
+from cadmultiphysics.solver import execute_solve
 
 
 @dataclass(frozen=True)
@@ -46,15 +47,15 @@ def solve(problem: str, out: str) -> CommandResult:
     spec = build_problem_spec(load_config(problem))
     run_dir = Path(out).resolve()
     domain, plan, manifest, artifacts = _problem_artifacts(spec, run_dir, "solve")
-    diagnostics = (
-        Diagnostic(
-            code="SOLVER_BACKEND_NOT_IMPLEMENTED",
-            message="DOLFINx/UFL/PETSc solve execution is not implemented.",
-            path=("solver",),
-            source="solver",
-        ),
-    )
-    return _finish_problem_command("solve", spec, domain, plan, manifest, artifacts, diagnostics, run_dir, 2)
+    result = execute_solve(spec, plan, run_dir)
+    artifacts.update({name: _artifact(path) for name, path in result.artifacts.items()})
+    manifest = _write_manifest(spec, run_dir, artifacts)
+    artifacts["manifest"] = _artifact(run_dir / "manifest.json")
+    restart_path = run_dir / "restarts" / "restart_0000.json"
+    restart_state = _solve_restart_state(spec, manifest, artifacts["manifest"].sha256, result.state)
+    write_json(restart_path, restart_state.model_dump(mode="json"))
+    artifacts["restart_0000"] = _artifact(restart_path)
+    return _finish_problem_command("solve", spec, domain, plan, manifest, artifacts, result.diagnostics, run_dir, result.exit_code, result.state, result.steps)
 
 
 def restart(restart_path: str, out: str) -> CommandResult:
@@ -140,6 +141,21 @@ def _mesh_restart_state(spec: ProblemSpec, manifest: RunManifest, manifest_hash:
     )
 
 
+def _solve_restart_state(spec: ProblemSpec, manifest: RunManifest, manifest_hash: str, state: SolutionState) -> RestartState:
+    return RestartState(
+        schema_version=spec.version,
+        content_hash=spec.content_hash,
+        manifest_path=manifest.output_paths["manifest"],
+        manifest_hash=manifest_hash,
+        mode=spec.mode,
+        fields=state.fields,
+        step_index=state.committed_step,
+        time=spec.time.start if spec.time and state.committed_step == 0 else None,
+        state_hash=state.state_hash,
+        artifacts={"state": str(Path(manifest.output_paths["restarts"]) / "state_committed.json")},
+    )
+
+
 def _finish_problem_command(
     command: Literal["mesh", "solve"],
     spec: ProblemSpec,
@@ -150,6 +166,8 @@ def _finish_problem_command(
     diagnostics: tuple[Diagnostic, ...],
     run_dir: Path,
     exit_code: int,
+    state: SolutionState | None = None,
+    steps: tuple[StepRecord, ...] = (),
 ) -> CommandResult:
     report = RunReport(
         command=command,
@@ -162,6 +180,8 @@ def _finish_problem_command(
         manifest=manifest.output_paths["manifest"],
         manifest_hash=artifacts["manifest"].sha256,
         artifacts=artifacts,
+        state=state,
+        steps=steps,
         diagnostics=diagnostics,
     )
     write_json(run_dir / "report.json", report.model_dump(mode="json"))

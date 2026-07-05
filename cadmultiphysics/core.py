@@ -116,6 +116,8 @@ def build_run_plan(spec: ProblemSpec) -> RunPlan:
         solver="ksp" if linear else "snes",
         steps=time.steps if time else 1,
         time=time,
+        output_cadence=spec.output.cadence,
+        restart_cadence=spec.output.restart_cadence,
     )
 
 
