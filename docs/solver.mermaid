@@ -1,36 +1,42 @@
 flowchart TD
-    DRIVER["SolverDriver\nselected by ProblemSpec.mode"]
-    PROFILE["SolverProfile\nPETSc options, prefixes, defaults, fallbacks"]
-    PHYS["PhysicsModel\nforms, outputs, invariants"]
-    DISCRETE["DiscreteModel\nspaces, dofs, measures, BCs, field layout"]
-    STATE["StateStore\ninitial/history/trial state, commit/rollback"]
-    REPORT["RunReport\nconvergence, residuals, timings, warnings, option snapshot"]
-    CKPT["CheckpointManifest\nstrict restart compatibility"]
+    RUNPLAN["RunPlan\nmode, time policy, output cadence,\ncheckpoint cadence, restart"]
+    STEPPER["Stepper\nsteady / fixed transient / adaptive transient /\nload ramp / continuation"]
+    PHYS["PhysicsPackage\nforms, material updates, invariants"]
+    DISCRETE["DiscreteModel\nspaces, dofs, measures, BC/load bindings"]
+    STATE["StateStore\ncurrent, trial, history, commit/rollback"]
+    ASSEMBLY["AssemblyPlan / AlgebraicSystem\nassemble F,J,P,A,b,M\napply BCs, nullspaces, block layout"]
+    PROFILE["SolverProfile\nPETSc prefix tree, KSP/SNES/PC options,\nfieldsplit policy, fallbacks"]
+    DRIVER["SolverDriver\nsolve one algebraic system"]
+    DIAG["Diagnostics\nresiduals, iterations, monitors,\nfailed steps, timings"]
+    ACCEPT{"Accept step?"}
+    COMMIT["commit state\nwrite outputs/checkpoint if due"]
+    ROLLBACK["rollback state\nadapt dt / fallback / abort"]
+    CKPT["CheckpointPayload + RestartContract"]
+    REPORT["RunReport"]
+    OUT["Solution outputs"]
+    POST["Postprocess"]
+    VIZ["VisualizationBundle"]
 
-    DRIVER --> MODE{"Solver mode"}
-    PROFILE -.-> DRIVER
-    PHYS -.-> DRIVER
-    DISCRETE -.-> DRIVER
-    STATE -.-> DRIVER
+    RUNPLAN --> STEPPER
+    STEPPER --> STATE
+    STEPPER --> ASSEMBLY
+    PHYS --> ASSEMBLY
+    DISCRETE --> ASSEMBLY
+    STATE --> ASSEMBLY
+    PROFILE --> DRIVER
+    ASSEMBLY --> DRIVER
+    DRIVER --> DIAG
+    DRIVER --> ACCEPT
 
-    MODE --> LS["linear_steady\nvalidate forms\nassemble A,b,P once\napply BCs/nullspace\nKSP solve\nverify residual/invariants"]
-    MODE --> LT["linear_transient\nfor each step: begin\nassemble/reuse step system\nKSP solve\nvalidate, accept, output, checkpoint"]
-    MODE --> NS["nonlinear_steady\noptional continuation/load ramp\nSNES F/J/P callbacks\nconvergence + invariant gate\ncommit internal state"]
-    MODE --> NT["nonlinear_transient\nfor each step: begin/predict\nSNES per step\nvalidate\ncommit or rollback\nadapt dt/fallback or abort"]
+    ACCEPT -->|yes| COMMIT
+    ACCEPT -->|no| ROLLBACK
 
-    LS --> OUT["Solution outputs"]
-    LT --> OUT
-    NS --> OUT
-    NT --> OUT
+    COMMIT --> STATE
+    COMMIT --> OUT
+    COMMIT --> CKPT
+    ROLLBACK --> STEPPER
 
-    LT --> CKPT
-    NS --> CKPT
-    NT --> CKPT
-
-    LS --> REPORT
-    LT --> REPORT
-    NS --> REPORT
-    NT --> REPORT
-
-    OUT --> POST["Postprocess\nprobes, integrals, derived fields"]
-    POST --> VIZ["VisualizationBundle\nmesh, named fields, tags, derived quantities, time metadata"]
+    OUT --> POST --> VIZ
+    DIAG --> REPORT
+    CKPT --> REPORT
+    VIZ --> REPORT

@@ -1,51 +1,78 @@
 flowchart LR
-    CFG["Config\nuser input, units, solver choices"]
-    SPEC["ProblemSpec\ncanonical normalized hashable spec"]
-    GEOM["GeometryModel\nCAD model + semantic NameMap"]
-    MESH["SemanticMesh\nGmsh/DOLFINx mesh, physical groups, tags, coverage"]
-    DISCRETE["DiscreteModel\nspaces, measures, dofs, materials, BCs, loads"]
-    PHYS["PhysicsModel\nfields, schemas, forms, outputs, invariants"]
-    STATE["StateStore\ncurrent/history/trial state, commit/rollback"]
-    SOLVER["SolverDriver\nlinear/nonlinear + steady/transient policy"]
-    POST["Postprocess\nprobes, integrals, derived fields, invariants"]
-    VIZ["VisualizationBundle\nmesh, fields, tags, time, metadata"]
-    CKPT["CheckpointManifest\nstrict hash/signature restart contract"]
-    REPORT["RunReport\nstatus, residuals, timings, warnings, PETSc snapshot, artifact hashes"]
-    STORE["ArtifactStore\nspec, geometry, mesh, forms, checkpoints, outputs, provenance"]
+    CFG["Config\nuser input, units, solver preferences"]
+    UNITS["Units\nnormalization + dimensional metadata"]
+    SPEC["ProblemSpec\ncanonical, normalized, hashable problem"]
+    RUNPLAN["RunPlan\nexecution policy: mesh, solver, time,\noutputs, checkpoints, restart"]
 
-    UNITS["Units\nnormalize values + dimensional metadata"]
-    VALID["Validation\nschema, geometry, mesh tags, BCs, forms, restart, output"]
-    PROFILE["SolverProfile\nPETSc root prefix, child prefixes, defaults, block policy"]
+    GEOM["GeometryModel\nCAD model + semantic names"]
+    TAGS["TagRegistry\nnames, physical ids, entity dims,\nmaterials, boundaries, interfaces, coverage policy"]
+    MESH["SemanticMesh\nmesh + meshtags + provenance + quality"]
 
-    CFG --> SPEC
-    UNITS -.-> SPEC
+    DISCRETE["DiscreteModel\nspaces, measures, dofs, BC/load bindings"]
+    PHYS["PhysicsPackage\nfields, materials, forms, ICs, BC schema,\noutputs, invariants"]
+    ASSEMBLY["AssemblyPlan / AlgebraicSystem\nF,J,P,A,b,M, nullspaces,\nblock layout, BC application, caches"]
+    STATE["StateStore\nstate vectors, history, transactions,\ncommit/rollback"]
+
+    STEPPER["Stepper\nsteady, transient, adaptive dt,\nload ramp, continuation"]
+    PROFILE["SolverProfile\nPETSc prefix tree, defaults,\nblock/fallback policy"]
+    SOLVER["SolverDriver\nKSP/SNES solve for one algebraic system"]
+    DIAG["Diagnostics\niterations, residuals, invariant events,\nfallbacks, timings"]
+
+    POST["Postprocess\nprobes, integrals, derived fields"]
+    VIZ["VisualizationBundle\nmesh, fields, tags, time metadata"]
+
+    RESTART["RestartContract\nstrict compatibility manifest"]
+    CKPT["CheckpointPayload\nstate/history/time/material variables"]
+    REPORT["RunReport\nstatus, convergence, warnings,\nPETSc snapshot, artifact hashes"]
+    STORE["ArtifactStore\nspec, geometry, mesh, forms,\ncheckpoints, outputs, provenance"]
+    VALID["Validation\nschema, geometry, tags, mesh,\nforms, restart, outputs"]
+
+    CFG --> UNITS --> SPEC --> RUNPLAN
     SPEC --> GEOM
+    GEOM --> TAGS
     GEOM --> MESH
+    TAGS --> MESH
     MESH --> DISCRETE
-    PHYS -. declares spaces/forms .-> DISCRETE
-    DISCRETE --> PHYS
-    DISCRETE --> STATE
-    STATE --> SOLVER
-    PHYS --> SOLVER
+    TAGS --> DISCRETE
+    PHYS --> DISCRETE
+    DISCRETE --> ASSEMBLY
+    PHYS --> ASSEMBLY
+    STATE --> ASSEMBLY
+    RUNPLAN --> STEPPER
+    STEPPER --> ASSEMBLY
     PROFILE --> SOLVER
-    SOLVER --> POST
+    ASSEMBLY --> SOLVER
+    SOLVER --> STATE
+    SOLVER --> DIAG
+    STEPPER --> DIAG
+    STATE --> POST
+    PHYS --> POST
     POST --> VIZ
-    SOLVER --> CKPT
-    SOLVER --> REPORT
 
-    SPEC <--> STORE
+    STATE --> CKPT
+    CKPT --> RESTART
+    SPEC --> RESTART
+    RUNPLAN --> RESTART
+    MESH --> RESTART
+    PHYS --> RESTART
+
+    SPEC --> STORE
+    RUNPLAN --> STORE
     GEOM --> STORE
+    TAGS --> STORE
     MESH --> STORE
-    DISCRETE --> STORE
+    ASSEMBLY --> STORE
     CKPT --> STORE
     VIZ --> STORE
+    DIAG --> REPORT
     STORE --> REPORT
+    RESTART --> REPORT
 
     VALID -.-> SPEC
-    VALID -.-> GEOM
+    VALID -.-> RUNPLAN
+    VALID -.-> TAGS
     VALID -.-> MESH
     VALID -.-> DISCRETE
     VALID -.-> PHYS
-    VALID -.-> STATE
-    VALID -.-> SOLVER
-    VALID -.-> VIZ
+    VALID -.-> ASSEMBLY
+    VALID -.-> RESTART
