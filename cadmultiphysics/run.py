@@ -11,10 +11,11 @@ from pydantic import ValidationError
 from cadmultiphysics.core import build_domain_ir, build_problem_spec, build_run_manifest, build_run_plan
 from cadmultiphysics.diagnostics import Diagnostic, schema_diagnostics
 from cadmultiphysics.errors import MeshError
-from cadmultiphysics.io import load_config, write_json
+from cadmultiphysics.io import load_config, write_diagnostics_csv, write_json
 from cadmultiphysics.mesh import generate_mesh
 from cadmultiphysics.schema import DomainIR, MeshMetadata, ProblemSpec, RestartState, RunArtifact, RunManifest, RunPlan, RunReport, SolutionState, StepRecord
 from cadmultiphysics.solver import execute_solve
+from cadmultiphysics.units import QuantitySpec
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,7 @@ def restart(restart_path: str, out: str) -> CommandResult:
     artifacts: dict[str, RunArtifact] = {}
     state = _load_restart_state(source)
     if isinstance(state, tuple):
+        _write_diagnostics_artifact(run_dir, artifacts, state)
         report = _restart_report(None, artifacts, state)
         write_json(run_dir / "report.json", report.model_dump(mode="json"))
         return CommandResult(report, 1)
@@ -81,6 +83,7 @@ def restart(restart_path: str, out: str) -> CommandResult:
                 source="restart",
             ),
         )
+    _write_diagnostics_artifact(run_dir, artifacts, diagnostics)
     report = _restart_report(state, artifacts, diagnostics)
     write_json(run_dir / "report.json", report.model_dump(mode="json"))
     return CommandResult(report, 2)
@@ -150,7 +153,7 @@ def _solve_restart_state(spec: ProblemSpec, manifest: RunManifest, manifest_hash
         mode=spec.mode,
         fields=state.fields,
         step_index=state.committed_step,
-        time=spec.time.start if spec.time and state.committed_step == 0 else None,
+        time=_state_time(state),
         state_hash=state.state_hash,
         artifacts={"state": str(Path(manifest.output_paths["restarts"]) / "state_committed.json")},
     )
@@ -169,6 +172,7 @@ def _finish_problem_command(
     state: SolutionState | None = None,
     steps: tuple[StepRecord, ...] = (),
 ) -> CommandResult:
+    _write_diagnostics_artifact(run_dir, artifacts, diagnostics)
     report = RunReport(
         command=command,
         status="failed" if diagnostics else "ok",
@@ -186,6 +190,18 @@ def _finish_problem_command(
     )
     write_json(run_dir / "report.json", report.model_dump(mode="json"))
     return CommandResult(report, exit_code)
+
+
+def _write_diagnostics_artifact(run_dir: Path, artifacts: dict[str, RunArtifact], diagnostics: tuple[Diagnostic, ...]) -> None:
+    path = run_dir / "diagnostics.csv"
+    write_diagnostics_csv(path, diagnostics)
+    artifacts["diagnostics"] = _artifact(path)
+
+
+def _state_time(state: SolutionState) -> QuantitySpec | None:
+    if state.time is None:
+        return None
+    return QuantitySpec(magnitude=state.time, unit=state.time_unit or "second", dimension="[time]")
 
 
 def _load_restart_state(source: Path) -> RestartState | tuple[Diagnostic, ...]:

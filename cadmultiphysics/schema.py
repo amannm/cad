@@ -14,6 +14,7 @@ FieldKind = Literal["scalar", "vector"]
 EntityType = Literal["box", "cylinder"]
 TagNamespace = Literal["materials", "boundaries", "interfaces", "curves", "points"]
 StepPhase = Literal["open", "predict", "discretize", "update", "build", "solve", "accept", "commit", "fail"]
+OutputCadence = Annotated[str, Field(pattern=r"^(end|every_step|never|every_[1-9][0-9]*)$")]
 
 
 class StrictModel(BaseModel):
@@ -122,8 +123,8 @@ class OutputInput(StrictModel):
     format: Literal["vtx", "xdmf", "json"] = "vtx"
     fields: tuple[Name, ...] = ()
     derived_fields: tuple[Name, ...] = ()
-    cadence: str = "end"
-    restart_cadence: str | None = None
+    cadence: OutputCadence = "end"
+    restart_cadence: OutputCadence | None = None
     report_formats: tuple[Literal["json", "csv"], ...] = ("json",)
     writer_options: dict[str, Any] = Field(default_factory=dict)
 
@@ -245,8 +246,8 @@ class OutputPlan(StrictModel):
     format: Literal["vtx", "xdmf", "json"]
     fields: tuple[str, ...]
     derived_fields: tuple[str, ...]
-    cadence: str
-    restart_cadence: str | None
+    cadence: OutputCadence
+    restart_cadence: OutputCadence | None
     report_formats: tuple[str, ...]
     writer_options: dict[str, Any]
 
@@ -330,9 +331,18 @@ class RunManifest(StrictModel):
     python_version: str
     mpi_size: int
     mesh_options: dict[str, Any]
+    solver_options: dict[str, Any]
     output_paths: dict[str, str]
     restart: dict[str, Any]
     artifact_hashes: dict[str, str] = Field(default_factory=dict)
+
+
+class ModeContract(StrictModel):
+    mode: Mode
+    problem_kind: Literal["linear", "nonlinear"]
+    transient: bool
+    solver: Literal["ksp", "snes"]
+    physics_interface: Literal["bilinear_linear", "linear_effective_system", "residual_jacobian", "time_discrete_residual_jacobian"]
 
 
 class TimeGrid(StrictModel):
@@ -350,8 +360,11 @@ class RunPlan(StrictModel):
     solver: Literal["ksp", "snes"]
     steps: int = Field(ge=1)
     time: TimeGrid | None = None
-    output_cadence: str
-    restart_cadence: str | None
+    contract: ModeContract
+    output_cadence: OutputCadence
+    restart_cadence: OutputCadence | None
+    output_steps: tuple[int, ...] = ()
+    restart_steps: tuple[int, ...] = ()
     checkpoint_policy: Literal["manifest_hash"] = "manifest_hash"
     stop_policy: Literal["fail_closed"] = "fail_closed"
 

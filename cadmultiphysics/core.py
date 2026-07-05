@@ -23,6 +23,8 @@ from cadmultiphysics.schema import (
     MaterialSpec,
     MeshPlan,
     MeshSizeSpec,
+    Mode,
+    ModeContract,
     OutputPlan,
     PETScProfile,
     ProblemInput,
@@ -39,7 +41,33 @@ from cadmultiphysics.units import UnitDiagnostics, canonical_quantity, canonical
 
 LENGTH = "[length]"
 TIME = "[time]"
-DIMENSIONLESS = "dimensionless"
+_LINEAR_OPTIONS = {
+    "ksp_type",
+    "ksp_rtol",
+    "ksp_atol",
+    "ksp_divtol",
+    "ksp_max_it",
+    "ksp_norm_type",
+    "ksp_initial_guess_nonzero",
+    "ksp_converged_reason",
+    "pc_type",
+    "pc_factor_mat_solver_type",
+    "pc_fieldsplit_type",
+    "pc_fieldsplit_schur_fact_type",
+    "pc_fieldsplit_schur_precondition",
+    "pc_fieldsplit_detect_saddle_point",
+}
+_NONLINEAR_OPTIONS = {
+    "snes_type",
+    "snes_rtol",
+    "snes_atol",
+    "snes_stol",
+    "snes_max_it",
+    "snes_linesearch_type",
+    "snes_converged_reason",
+}
+_POSITIVE_FLOAT_OPTIONS = {"ksp_rtol", "ksp_atol", "ksp_divtol", "snes_rtol", "snes_atol", "snes_stol"}
+_POSITIVE_INT_OPTIONS = {"ksp_max_it", "snes_max_it"}
 
 
 def build_problem_spec(data: dict[str, Any]) -> ProblemSpec:
@@ -88,6 +116,7 @@ def build_run_manifest(spec: ProblemSpec, run_dir: str) -> RunManifest:
         python_version=platform.python_version(),
         mpi_size=int(os.environ.get("OMPI_COMM_WORLD_SIZE") or os.environ.get("PMI_SIZE") or "1"),
         mesh_options=spec.mesh.model_dump(mode="json"),
+        solver_options=petsc_options(spec.solver),
         output_paths={
             "run_dir": run_dir,
             "manifest": f"{run_dir}/manifest.json",
@@ -106,18 +135,21 @@ def build_run_manifest(spec: ProblemSpec, run_dir: str) -> RunManifest:
 
 
 def build_run_plan(spec: ProblemSpec) -> RunPlan:
-    linear = spec.mode.startswith("linear")
-    transient = spec.mode.endswith("_transient")
-    time = _time_grid(spec) if transient else None
+    contract = mode_contract(spec.mode)
+    time = _time_grid(spec) if contract.transient else None
+    steps = time.steps if time else 1
     return RunPlan(
         mode=spec.mode,
-        problem_kind="linear" if linear else "nonlinear",
-        transient=transient,
-        solver="ksp" if linear else "snes",
-        steps=time.steps if time else 1,
+        problem_kind=contract.problem_kind,
+        transient=contract.transient,
+        solver=contract.solver,
+        steps=steps,
         time=time,
+        contract=contract,
         output_cadence=spec.output.cadence,
         restart_cadence=spec.output.restart_cadence,
+        output_steps=_cadence_steps(spec.output.cadence, steps),
+        restart_steps=_cadence_steps(spec.output.restart_cadence or "never", steps),
     )
 
 
@@ -129,6 +161,53 @@ def content_hash(spec: ProblemSpec) -> str:
 
 def input_json_schema() -> dict[str, Any]:
     return ProblemInput.model_json_schema()
+
+
+def mode_contract(mode: Mode) -> ModeContract:
+    contracts = {
+        "linear_steady": ModeContract(
+            mode="linear_steady",
+            problem_kind="linear",
+            transient=False,
+            solver="ksp",
+            physics_interface="bilinear_linear",
+        ),
+        "linear_transient": ModeContract(
+            mode="linear_transient",
+            problem_kind="linear",
+            transient=True,
+            solver="ksp",
+            physics_interface="linear_effective_system",
+        ),
+        "nonlinear_steady": ModeContract(
+            mode="nonlinear_steady",
+            problem_kind="nonlinear",
+            transient=False,
+            solver="snes",
+            physics_interface="residual_jacobian",
+        ),
+        "nonlinear_transient": ModeContract(
+            mode="nonlinear_transient",
+            problem_kind="nonlinear",
+            transient=True,
+            solver="snes",
+            physics_interface="time_discrete_residual_jacobian",
+        ),
+    }
+    return contracts[mode]
+
+
+def petsc_options(profile: PETScProfile) -> dict[str, Any]:
+    prefix = profile.prefix
+    options: dict[str, Any] = {}
+    for key, value in sorted(profile.nonlinear.items()):
+        options[f"{prefix}{key}"] = value
+    for key, value in sorted(profile.linear.items()):
+        options[f"{prefix}{key}"] = value
+    for name, split in sorted(profile.fieldsplits.items()):
+        for key, value in sorted(split.items()):
+            options[f"{prefix}fieldsplit_{name}_{key}"] = value
+    return options
 
 
 def _semantic_diagnostics(raw: ProblemInput) -> list[Diagnostic]:
@@ -169,7 +248,7 @@ def _semantic_diagnostics(raw: ProblemInput) -> list[Diagnostic]:
                         source="tags",
                     )
                 )
-            diagnostics.extend(_tag_entity_diagnostics(tag, entity_set, path))
+            diagnostics.extend(_tag_entity_diagnostics(tag, entity_set, expected_dim, path))
     for material in material_names:
         if material not in raw.tags.materials:
             diagnostics.append(
@@ -254,6 +333,7 @@ def _semantic_diagnostics(raw: ProblemInput) -> list[Diagnostic]:
                 source="solver",
             )
         )
+    diagnostics.extend(_solver_profile_diagnostics(raw.solver))
     return diagnostics
 
 
@@ -495,8 +575,13 @@ def _entity_diagnostics(entity: GeometryEntityInput, path: tuple[str | int, ...]
     return diagnostics
 
 
-def _tag_entity_diagnostics(tag: SemanticTagInput, entity_set: set[str], path: tuple[str | int, ...]) -> list[Diagnostic]:
-    return [
+def _tag_entity_diagnostics(
+    tag: SemanticTagInput,
+    entity_set: set[str],
+    expected_dim: int,
+    path: tuple[str | int, ...],
+) -> list[Diagnostic]:
+    diagnostics = [
         Diagnostic(
             code="TAG_ENTITY_UNKNOWN",
             message=f"Tag references unknown geometry entity '{entity}'.",
@@ -506,6 +591,16 @@ def _tag_entity_diagnostics(tag: SemanticTagInput, entity_set: set[str], path: t
         for index, entity in enumerate(tag.entities)
         if entity not in entity_set
     ]
+    if tag.entities and expected_dim != 3:
+        diagnostics.append(
+            Diagnostic(
+                code="TAG_ENTITY_DIMENSION_UNSUPPORTED",
+                message="Named geometry entity references currently target volume entities; use a selector for lower-dimensional tags.",
+                path=(*path, "entities"),
+                source="tags",
+            )
+        )
+    return diagnostics
 
 
 def _duplicates(values: list[str], path: tuple[str | int, ...], code: str, diagnostics: list[Diagnostic]) -> None:
@@ -529,6 +624,64 @@ def _all_tags(tags: Any) -> set[str]:
 
 def _unknown(code: str, message: str, path: tuple[str | int, ...]) -> Diagnostic:
     return Diagnostic(code=code, message=message, path=path, source="schema")
+
+
+def _solver_profile_diagnostics(profile: Any) -> list[Diagnostic]:
+    if profile.allow_backend_options:
+        return []
+    diagnostics: list[Diagnostic] = []
+    diagnostics.extend(_option_diagnostics(profile.linear, _LINEAR_OPTIONS, ("solver", "linear")))
+    diagnostics.extend(_option_diagnostics(profile.nonlinear, _NONLINEAR_OPTIONS, ("solver", "nonlinear")))
+    for name, options in profile.fieldsplits.items():
+        diagnostics.extend(_option_diagnostics(options, _LINEAR_OPTIONS, ("solver", "fieldsplits", name)))
+    return diagnostics
+
+
+def _option_diagnostics(options: dict[str, Any], allowed: set[str], path: tuple[str | int, ...]) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    for key, value in sorted(options.items()):
+        option_path = (*path, key)
+        if key not in allowed:
+            diagnostics.append(
+                Diagnostic(
+                    code="SOLVER_OPTION_UNKNOWN",
+                    message=f"Solver option '{key}' is not in the strict supported subset.",
+                    path=option_path,
+                    source="solver",
+                    hint="Set solver.allow_backend_options to true to pass backend-specific options through.",
+                )
+            )
+            continue
+        if key in _POSITIVE_FLOAT_OPTIONS and (not isinstance(value, int | float) or float(value) <= 0.0):
+            diagnostics.append(
+                Diagnostic(
+                    code="SOLVER_OPTION_VALUE_INVALID",
+                    message=f"Solver option '{key}' must be a positive number.",
+                    path=option_path,
+                    source="solver",
+                )
+            )
+        if key in _POSITIVE_INT_OPTIONS and (not isinstance(value, int) or value <= 0):
+            diagnostics.append(
+                Diagnostic(
+                    code="SOLVER_OPTION_VALUE_INVALID",
+                    message=f"Solver option '{key}' must be a positive integer.",
+                    path=option_path,
+                    source="solver",
+                )
+            )
+    return diagnostics
+
+
+def _cadence_steps(cadence: str, steps: int) -> tuple[int, ...]:
+    if cadence == "never":
+        return ()
+    if cadence == "end":
+        return (steps,)
+    if cadence == "every_step":
+        return tuple(range(1, steps + 1))
+    stride = int(cadence.removeprefix("every_"))
+    return tuple(step for step in range(stride, steps + 1, stride))
 
 
 def _cell_dimension(cell_type: str) -> int:

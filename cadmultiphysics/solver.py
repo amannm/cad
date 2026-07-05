@@ -22,14 +22,17 @@ class SolverResult:
 def execute_solve(spec: ProblemSpec, plan: RunPlan, run_dir: Path) -> SolverResult:
     committed = initial_solution_state(spec, plan)
     trial = open_trial_state(committed, plan)
+    step_index = trial.trial_step or committed.committed_step + 1
     diagnostic = Diagnostic(
         code="SOLVER_BACKEND_NOT_IMPLEMENTED",
         message=f"{spec.mode} solve execution requires the DOLFINx/UFL/PETSc backend.",
         path=("solver",),
+        step_index=step_index,
         source="solver",
+        payload={"required_interface": plan.contract.physics_interface, "driver": plan.solver},
     )
     record = StepRecord(
-        index=trial.trial_step or committed.committed_step + 1,
+        index=step_index,
         status="failed",
         mode=spec.mode,
         solver=plan.solver,
@@ -44,6 +47,7 @@ def execute_solve(spec: ProblemSpec, plan: RunPlan, run_dir: Path) -> SolverResu
                 name="petsc_converged",
                 status="failed",
                 diagnostic=diagnostic.code,
+                payload={"driver": plan.solver},
             ),
         ),
         diagnostics=(diagnostic,),

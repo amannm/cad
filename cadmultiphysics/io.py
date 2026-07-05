@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import os
 import re
@@ -87,6 +88,36 @@ def write_json(path: str | os.PathLike[str], payload: Any) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
             handle.write("\n")
+        os.replace(tmp, target)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def write_diagnostics_csv(path: str | os.PathLike[str], diagnostics: tuple[Diagnostic, ...]) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(("severity", "code", "path", "step_index", "source", "message", "hint", "backend_error"))
+            for diagnostic in diagnostics:
+                writer.writerow(
+                    (
+                        diagnostic.severity,
+                        diagnostic.code,
+                        ".".join(str(part) for part in diagnostic.path),
+                        "" if diagnostic.step_index is None else diagnostic.step_index,
+                        diagnostic.source,
+                        diagnostic.message,
+                        diagnostic.hint or "",
+                        diagnostic.backend_error or "",
+                    )
+                )
         os.replace(tmp, target)
     except Exception:
         try:
