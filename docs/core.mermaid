@@ -18,29 +18,32 @@ flowchart LR
     subgraph GeometryMesh[Geometry and mesh]
         GEOMAPI["Geometry API\nsmall internal B-rep protocol\nCadQuery/OCP or Gmsh OCC adapter"]
         GEOM["GeometryModel\nB-rep + stable semantic names\nface/edge/volume handles"]
-        TAGS["Semantic Tags\nphysical groups / regions\nmaterial + boundary + interface labels"]
-        MESHPLAN["MeshPlan\ncell type, order, size fields,\ncurvature, boundary layers"]
+        GEOMVALID["GeometryValidation\nclosed volumes, tolerances,\nname coverage, OCC heal status"]
+        TAGS["Semantic Tags\nphysical groups / regions\nmaterial + boundary + interface labels\nCAD entity dimension + name map"]
+        MESHPLAN["MeshPlan\ncell type, geometric order, size fields,\ncurvature, boundary layers, partitions"]
         MESHGEN["MeshGenerator\nGmsh adapter\nexport mesh + tags"]
-        MESH["SemanticMesh\nDOLFINx mesh, meshtags,\nCAD provenance, partitions"]
+        MESH["SemanticMesh\nDOLFINx mesh, cell/facet meshtags,\nCAD provenance, ghosting, partitions"]
         MESHVALID["MeshValidation\norientation, tag coverage,\nquality thresholds"]
     end
 
     subgraph Physics[Physics compilation]
-        FIELDS["FieldRegistry\nunknowns, components, units,\nelement family/order"]
+        FIELDS["FieldRegistry\nunknowns, components, units,\nvalue shape, element family/order"]
         MATERIALS["MaterialRegistry\nparameters, constitutive state,\nupdate hooks"]
-        PHYS["PhysicsPackage\nUFL residuals/bilinears,\nIC/BC/load schemas, invariants"]
+        PHYS["PhysicsPackage\nUFL residuals/bilinears,\nIC/BC/load schemas, invariants,\nmaterial tangent contracts"]
         COUPLING["CouplingGraph\nfield dependencies\nblock ownership"]
         SPACES["SpaceBuilder\nBasix/UFL elements\nmixed spaces, subspaces"]
-        DISCRETE["DiscreteModel\nspaces, measures, dofs,\nBC/load/material bindings"]
-        FORMS["FormCache\nUFL + element + quadrature +\ncompiler/runtime signature"]
+        DISCRETE["DiscreteModel\nspaces, measures, dofmaps,\nBC/load/material bindings, entity maps"]
+        FORMS["FormCache\nUFL + element + quadrature +\nscalar type + compiler/runtime signature"]
     end
 
     subgraph Algebra[Algebra and solve]
-        ALG["AlgebraicSystem\nF/J or A/b/M/P\nnullspaces, block maps, BC policy"]
-        PROFILE["SolverProfile\nPETSc option prefix tree\nKSP/SNES/PC/FieldSplit"]
+        ALG["AlgebraicSystem\nA,b,M or F,J,P\nnullspaces, near-nullspaces, block IS, BC policy"]
+        LINPOLICY["LinearizationPolicy\nJacobian/tangent source, preconditioner form,\nconsistent residual update"]
+        PROFILE["SolverProfile\nPETSc options prefix tree\nKSP/SNES/PC/FieldSplit\nper-field and nested prefixes"]
         DRIVER["SolverDriver\nexecute one algebraic solve"]
         STEP["Stepper\nsteady, transient, load/time loop\nmode-specific assembly order"]
-        STATE["StateStore\ncurrent, trial, history,\nmaterial variables"]
+        TIME["TimeIntegrator\nBE/CN/generalized-alpha hooks\nstate prediction + history update"]
+        STATE["StateStore\ncommitted, trial, history,\nmaterial/internal variables"]
         DIAG["Diagnostics\nresiduals, iterations, timings,\nconservation/invariant checks"]
     end
 
@@ -61,7 +64,7 @@ flowchart LR
     SPEC --> MODEL
     SPEC --> MODE
     SPEC --> STORE
-    MODEL --> GEOMAPI --> GEOM --> TAGS
+    MODEL --> GEOMAPI --> GEOM --> GEOMVALID --> TAGS
     MODEL --> FIELDS
     MODEL --> MATERIALS
     MODEL --> PHYS
@@ -76,11 +79,16 @@ flowchart LR
     MATERIALS --> PHYS
     PHYS --> COUPLING
     PHYS --> DISCRETE
+    PHYS --> LINPOLICY
     DISCRETE --> FORMS
-    COUPLING --> ALG
-    FORMS --> ALG
+    COUPLING --> LINPOLICY --> ALG
+    FORMS --> LINPOLICY
+    STATE --> LINPOLICY
     STATE --> ALG
     MODE --> STEP
+    MODE --> TIME
+    TIME --> STEP
+    STATE --> TIME
     STEP --> ALG
     PROFILE --> DRIVER
     ALG --> DRIVER --> STATE
@@ -109,9 +117,11 @@ flowchart LR
     VALID -.-> SCHEMA
     VALID -.-> UNITS
     VALID -.-> GEOM
+    VALID -.-> GEOMVALID
     VALID -.-> TAGS
     VALID -.-> MESHVALID
     VALID -.-> DISCRETE
     VALID -.-> PHYS
+    VALID -.-> LINPOLICY
     VALID -.-> PROFILE
     VALID -.-> OUTPLAN
