@@ -99,6 +99,11 @@ class LoadInput(StrictModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
+class InitialConditionInput(StrictModel):
+    field: Name
+    value: Any
+
+
 class MeshSizeInput(StrictModel):
     global_size: Any = Field(alias="global")
     local: dict[Name, Any] = Field(default_factory=dict)
@@ -150,6 +155,7 @@ class ProblemInput(StrictModel):
     materials: dict[Name, MaterialInput]
     boundary_conditions: tuple[BoundaryConditionInput, ...] = ()
     loads: tuple[LoadInput, ...] = ()
+    initial_conditions: tuple[InitialConditionInput, ...] = ()
     mesh: MeshInput
     solver: SolverInput = Field(default_factory=SolverInput)
     output: OutputInput = Field(default_factory=OutputInput)
@@ -225,6 +231,11 @@ class LoadSpec(StrictModel):
     parameters: dict[str, Any]
 
 
+class InitialConditionSpec(StrictModel):
+    field: str
+    value: Any
+
+
 class MeshSizeSpec(StrictModel):
     global_size: QuantitySpec
     local: dict[str, QuantitySpec]
@@ -275,6 +286,7 @@ class ProblemSpec(StrictModel):
     materials: dict[str, MaterialSpec]
     bcs: tuple[BoundaryConditionSpec, ...]
     loads: tuple[LoadSpec, ...]
+    initial_conditions: tuple[InitialConditionSpec, ...]
     mesh: MeshPlan
     solver: PETScProfile
     output: OutputPlan

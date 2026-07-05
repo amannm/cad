@@ -45,3 +45,7 @@
 	path = reference/ffcx
 	url = https://github.com/FEniCS/ffcx.git
 	ignore = all
+[submodule "reference/slepc"]
+	path = reference/slepc
+	url = https://gitlab.com/slepc/slepc.git
+	ignore = all

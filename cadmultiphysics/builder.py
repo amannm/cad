@@ -70,6 +70,7 @@ class Problem:
             "materials": {},
             "boundary_conditions": [],
             "loads": [],
+            "initial_conditions": [],
             "solver": {},
             "output": {},
             "metadata": {},
@@ -173,6 +174,10 @@ class Problem:
                 "parameters": parameters,
             }
         )
+        return self
+
+    def initial_condition(self, *, field: str, value: Any) -> "Problem":
+        self._data["initial_conditions"].append({"field": field, "value": value})
         return self
 
     def time(self, *, start: Any, stop: Any, step: Any, scheme: str = "backward_euler") -> "Problem":

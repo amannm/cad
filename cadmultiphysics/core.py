@@ -18,6 +18,7 @@ from cadmultiphysics.schema import (
     GeometryEntityInput,
     GeometryEntitySpec,
     GeometrySpec,
+    InitialConditionSpec,
     LoadSpec,
     MaterialSpec,
     MeshPlan,
@@ -216,6 +217,7 @@ def _semantic_diagnostics(raw: ProblemInput) -> list[Diagnostic]:
     _duplicates(field_names, ("fields",), "FIELD_DUPLICATE", diagnostics)
     _duplicates([bc.name for bc in raw.boundary_conditions], ("boundary_conditions",), "BC_DUPLICATE", diagnostics)
     _duplicates([load.name for load in raw.loads], ("loads",), "LOAD_DUPLICATE", diagnostics)
+    _duplicates([initial.field for initial in raw.initial_conditions], ("initial_conditions",), "INITIAL_CONDITION_DUPLICATE", diagnostics)
     entity_set = set(entity_names)
     field_set = set(field_names)
     for index, entity in enumerate(raw.geometry.entities):
@@ -291,6 +293,10 @@ def _semantic_diagnostics(raw: ProblemInput) -> list[Diagnostic]:
             diagnostics.append(_unknown("LOAD_FIELD_UNKNOWN", f"Load '{load.name}' references unknown field '{load.field}'.", (*path, "field")))
         if load.on not in all_tags:
             diagnostics.append(_unknown("LOAD_TAG_UNKNOWN", f"Load '{load.name}' references unknown tag '{load.on}'.", (*path, "on")))
+    initial_fields = {initial.field for initial in raw.initial_conditions}
+    for index, initial in enumerate(raw.initial_conditions):
+        if initial.field not in field_set:
+            diagnostics.append(_unknown("INITIAL_CONDITION_FIELD_UNKNOWN", f"Initial condition references unknown field '{initial.field}'.", ("initial_conditions", index, "field")))
     for index, name in enumerate(raw.output.fields):
         if name not in field_set:
             diagnostics.append(_unknown("OUTPUT_FIELD_UNKNOWN", f"Output references unknown field '{name}'.", ("output", "fields", index)))
@@ -306,12 +312,31 @@ def _semantic_diagnostics(raw: ProblemInput) -> list[Diagnostic]:
                 source="schema",
             )
         )
+    if raw.mode.endswith("_transient"):
+        for name in sorted(field_set - initial_fields):
+            diagnostics.append(
+                Diagnostic(
+                    code="INITIAL_CONDITION_REQUIRED",
+                    message=f"Transient mode '{raw.mode}' requires an initial condition for field '{name}'.",
+                    path=("initial_conditions",),
+                    source="schema",
+                )
+            )
     if raw.mode.endswith("_steady") and raw.time is not None:
         diagnostics.append(
             Diagnostic(
                 code="TIME_UNEXPECTED",
                 message=f"Mode '{raw.mode}' must not include a time block.",
                 path=("time",),
+                source="schema",
+            )
+        )
+    if raw.mode.endswith("_steady") and raw.initial_conditions:
+        diagnostics.append(
+            Diagnostic(
+                code="INITIAL_CONDITIONS_UNEXPECTED",
+                message=f"Mode '{raw.mode}' must not include initial conditions.",
+                path=("initial_conditions",),
                 source="schema",
             )
         )
@@ -351,6 +376,10 @@ def _canonical_problem(raw: ProblemInput) -> ProblemSpec:
         },
         bcs=tuple(_bc_spec(bc, index, field_dimensions, field_components) for index, bc in enumerate(raw.boundary_conditions)),
         loads=tuple(_load_spec(load, index) for index, load in enumerate(raw.loads)),
+        initial_conditions=tuple(
+            _initial_condition_spec(initial, index, field_dimensions, field_components)
+            for index, initial in enumerate(raw.initial_conditions)
+        ),
         mesh=_mesh_plan(raw.mesh),
         solver=PETScProfile(
             prefix=raw.solver.prefix,
@@ -463,6 +492,30 @@ def _load_spec(load: Any, index: int) -> LoadSpec:
         value=canonical_value(load.value, ("loads", index, "value")) if load.value is not None else None,
         parameters={key: canonical_value(value, ("loads", index, "parameters", key)) for key, value in sorted(load.parameters.items())},
     )
+
+
+def _initial_condition_spec(
+    initial: Any,
+    index: int,
+    field_dimensions: dict[str, str],
+    field_components: dict[str, int],
+) -> InitialConditionSpec:
+    value = canonical_quantity(initial.value, ("initial_conditions", index, "value"), field_dimensions[initial.field]).model_dump(mode="json")
+    magnitude = value["magnitude"]
+    if (isinstance(magnitude, list) and len(magnitude) != field_components[initial.field]) or (
+        not isinstance(magnitude, list) and field_components[initial.field] != 1
+    ):
+        raise UnitDiagnostics(
+            [
+                Diagnostic(
+                    code="INITIAL_CONDITION_COMPONENT_MISMATCH",
+                    message=f"Initial condition for field '{initial.field}' expects {field_components[initial.field]} components.",
+                    path=("initial_conditions", index, "value"),
+                    source="schema",
+                )
+            ]
+        )
+    return InitialConditionSpec(field=initial.field, value=value)
 
 
 def _mesh_plan(mesh: Any) -> MeshPlan:

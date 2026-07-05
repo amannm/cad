@@ -53,6 +53,11 @@ loads:
     field: T
     type: flux
     value: 10000 W/m^2
+initial_conditions:
+  - field: u
+    value: ["0 m", "0 m", "0 m"]
+  - field: T
+    value: 300 K
 mesh:
   cell_type: tetrahedron
   order: 1

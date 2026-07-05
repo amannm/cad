@@ -9,7 +9,7 @@ description = "Compact CAD and multiphysics orchestration core"
 readme = "docs/SPEC.md"
 requires-python = ">=3.11"
 dependencies = [
-  "pydantic>=2.7,<3",
+  "pydantic>=2.13,<3",
   "pint>=0.24,<1",
   "PyYAML>=6.0,<7",
   "gmsh>=4.13,<5",

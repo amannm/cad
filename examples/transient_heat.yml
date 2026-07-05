@@ -1,0 +1,70 @@
+name: transient_heat
+mode: linear_transient
+units:
+  system: SI
+geometry:
+  backend: gmsh_occ
+  entities:
+    - type: box
+      name: body
+      size: ["0.04 m", "0.02 m", "0.01 m"]
+tags:
+  materials:
+    aluminum:
+      dim: 3
+      entities: [body]
+  boundaries:
+    cold_left:
+      dim: 2
+      selector: "x == 0"
+    heat_top:
+      dim: 2
+      selector: "z == 0.01 m"
+fields:
+  - name: T
+    kind: scalar
+    unit: K
+    element:
+      family: Lagrange
+      order: 1
+materials:
+  aluminum:
+    model: isotropic_heat
+    parameters:
+      k: 205 W/(m*K)
+      rho: 2700 kg/m^3
+      cp: 900 J/(kg*K)
+boundary_conditions:
+  - name: cold_left
+    on: cold_left
+    field: T
+    type: dirichlet
+    value: 300 K
+loads:
+  - name: heat_top
+    on: heat_top
+    field: T
+    type: flux
+    value: 5000 W/m^2
+initial_conditions:
+  - field: T
+    value: 300 K
+mesh:
+  cell_type: tetrahedron
+  order: 1
+  size:
+    global: 0.01 m
+solver:
+  linear:
+    ksp_type: gmres
+    ksp_rtol: 1.0e-10
+    pc_type: gamg
+output:
+  format: vtx
+  fields: [T]
+  cadence: every_step
+time:
+  start: 0 s
+  stop: 0.03 s
+  step: 0.01 s
+  scheme: backward_euler

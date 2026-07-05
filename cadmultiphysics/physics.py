@@ -104,6 +104,7 @@ def physics_diagnostics(spec: ProblemSpec) -> list[Diagnostic]:
                     )
                 )
         diagnostics.extend(_parameter_diagnostics(name, material.model, material.parameters, contract.parameters))
+        diagnostics.extend(_transient_material_diagnostics(spec.mode, name, material.model, material.parameters))
     diagnostics.extend(_bc_diagnostics(spec))
     diagnostics.extend(_load_diagnostics(spec, field_roles))
     return diagnostics
@@ -150,6 +151,21 @@ def _parameter_diagnostics(
             continue
         diagnostics.extend(_quantity_rule_diagnostics(value, rule, ("materials", material_name, "parameters", key), f"Parameter '{key}'"))
     return diagnostics
+
+
+def _transient_material_diagnostics(mode: str, material_name: str, model: str, parameters: dict[str, Any]) -> list[Diagnostic]:
+    if mode != "linear_transient" or model != "isotropic_heat":
+        return []
+    return [
+        Diagnostic(
+            code="PHYSICS_PARAMETER_REQUIRED",
+            message=f"Material model '{model}' requires parameter '{key}' for mode '{mode}'.",
+            path=("materials", material_name, "parameters", key),
+            source="physics",
+        )
+        for key in ("rho", "cp")
+        if key not in parameters
+    ]
 
 
 def _bc_diagnostics(spec: ProblemSpec) -> list[Diagnostic]:

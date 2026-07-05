@@ -19,11 +19,14 @@
 - [CadQuery Source Code](reference/cadquery)
 - [Gmsh Source Code](reference/gmsh)
 - [DOLFINx Source Code](reference/dolfinx)
+- [FFCx Source Code](reference/ffcx)
+- [Basix Source Code](reference/basix)
 - [UFL Source Code](reference/ufl)
 - [PETSc Source Code](reference/petsc)
+- [SLEPc Source Code](reference/slepc)
+- [ADIOS2 Source Code](reference/ADIOS2)
 - [ParaView Source Code](reference/paraview)
 - [Pint Source Code](reference/pint)
-- [ADIOS2 Source Code](reference/ADIOS2)
 - [Pydantic Source Code](reference/pydantic)
 
 # Environment

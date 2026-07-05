@@ -47,7 +47,7 @@ requires-dist = [
     { name = "fenics-dolfinx", extras = ["petsc4py"], directory = "reference/dolfinx/python" },
     { name = "gmsh", specifier = ">=4.13,<5" },
     { name = "pint", specifier = ">=0.24,<1" },
-    { name = "pydantic", specifier = ">=2.7,<3" },
+    { name = "pydantic", specifier = ">=2.13,<3" },
     { name = "pyyaml", specifier = ">=6.0,<7" },
 ]
 
