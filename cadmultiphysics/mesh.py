@@ -22,6 +22,7 @@ from cadmultiphysics.schema import (
 from cadmultiphysics.units import canonical_quantity
 
 _SELECTOR = re.compile(r"^\s*([xyz])\s*(==|<=|>=|<|>)\s*(.+?)\s*$")
+_AND = re.compile(r"\s+and\s+", re.IGNORECASE)
 _NUMBER = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
 _NAMESPACES: tuple[TagNamespace, ...] = ("materials", "boundaries", "interfaces", "curves", "points")
 
@@ -101,18 +102,44 @@ def _build_geometry(spec: ProblemSpec) -> dict[str, GeometryEntityIR]:
             size = _vec3(entity.size.magnitude)
             origin = _vec3(entity.origin.magnitude) if entity.origin else (0.0, 0.0, 0.0)
             tag = gmsh.model.occ.addBox(origin[0], origin[1], origin[2], size[0], size[1], size[2])
-        else:
+            entities[entity.name] = GeometryEntityIR(
+                name=entity.name,
+                type=entity.type,
+                dim=3,
+                backend_tag=tag,
+                bounds=_occ_bounds(3, tag),
+            )
+        elif entity.type == "cylinder":
             radius = _scalar(entity.radius.magnitude)
             height = _scalar(entity.height.magnitude)
             axis = _axis(entity.axis or (0.0, 0.0, 1.0))
             tag = gmsh.model.occ.addCylinder(0.0, 0.0, 0.0, axis[0] * height, axis[1] * height, axis[2] * height, radius)
-        entities[entity.name] = GeometryEntityIR(
-            name=entity.name,
-            type=entity.type,
-            dim=3,
-            backend_tag=tag,
-            bounds=_occ_bounds(3, tag),
-        )
+            entities[entity.name] = GeometryEntityIR(
+                name=entity.name,
+                type=entity.type,
+                dim=3,
+                backend_tag=tag,
+                bounds=_occ_bounds(3, tag),
+            )
+        elif entity.type == "boolean_union":
+            out = _boolean_result(
+                entity.name,
+                entity.type,
+                gmsh.model.occ.fuse([_entity_dim_tag(entities, entity.entities[0])], _entity_dim_tags(entities, entity.entities[1:])),
+            )
+            for name in entity.entities:
+                entities.pop(name, None)
+            entities[entity.name] = out
+        else:
+            out = _boolean_result(
+                entity.name,
+                entity.type,
+                gmsh.model.occ.cut([_entity_dim_tag(entities, entity.base)], _entity_dim_tags(entities, entity.tools)),
+            )
+            entities.pop(entity.base, None)
+            for name in entity.tools:
+                entities.pop(name, None)
+            entities[entity.name] = out
     return entities
 
 
@@ -158,7 +185,18 @@ def _select_entities(
 ) -> set[int]:
     selected: set[int] = set()
     for name in tag.entities:
-        selected.add(entities[name].backend_tag)
+        entity = entities.get(name)
+        if entity is None:
+            diagnostics.append(
+                Diagnostic(
+                    code="TAG_ENTITY_INACTIVE",
+                    message=f"Tag references geometry entity '{name}' that is not active after boolean operations.",
+                    path=(*path, "entities"),
+                    source="tags",
+                )
+            )
+            continue
+        selected.add(entity.backend_tag)
     if tag.selector:
         selector = _parse_selector(tag.selector, path, diagnostics)
         if selector is not None:
@@ -355,43 +393,50 @@ def _parse_selector(
     selector: str,
     path: tuple[str | int, ...],
     diagnostics: list[Diagnostic],
-) -> tuple[str, str, float] | None:
-    match = _SELECTOR.match(selector)
-    if match is None:
-        diagnostics.append(
-            Diagnostic(
-                code="TAG_SELECTOR_INVALID",
-                message=f"Selector '{selector}' is not supported.",
-                path=(*path, "selector"),
-                source="tags",
+) -> tuple[tuple[str, str, float], ...] | None:
+    clauses: list[tuple[str, str, float]] = []
+    for index, clause in enumerate(_AND.split(selector)):
+        match = _SELECTOR.match(clause)
+        if match is None:
+            diagnostics.append(
+                Diagnostic(
+                    code="TAG_SELECTOR_INVALID",
+                    message=f"Selector '{selector}' contains unsupported clause '{clause}'.",
+                    path=(*path, "selector", index),
+                    source="tags",
+                )
             )
-        )
-        return None
-    axis, op, value = match.groups()
-    try:
-        return axis, op, _selector_value(value.strip())
-    except Exception as exc:
-        diagnostics.append(
-            Diagnostic(
-                code="TAG_SELECTOR_INVALID",
-                message=f"Selector '{selector}' has an invalid coordinate value.",
-                path=(*path, "selector"),
-                source="tags",
-                backend_error=str(exc),
+            return None
+        axis, op, value = match.groups()
+        try:
+            clauses.append((axis, op, _selector_value(value.strip(), (*path, "selector", index))))
+        except Exception as exc:
+            diagnostics.append(
+                Diagnostic(
+                    code="TAG_SELECTOR_INVALID",
+                    message=f"Selector '{selector}' has an invalid coordinate value.",
+                    path=(*path, "selector", index),
+                    source="tags",
+                    backend_error=str(exc),
+                )
             )
-        )
-        return None
+            return None
+    return tuple(clauses)
 
 
-def _selector_value(value: str) -> float:
+def _selector_value(value: str, path: tuple[str | int, ...]) -> float:
     if _NUMBER.match(value):
         return float(value)
-    quantity = canonical_quantity(value, ("tags", "selector"), "[length]")
+    quantity = canonical_quantity(value, path, "[length]")
     return _scalar(quantity.magnitude)
 
 
-def _selector_matches(selector: tuple[str, str, float], bounds: tuple[float, float, float, float, float, float]) -> bool:
-    axis, op, value = selector
+def _selector_matches(selector: tuple[tuple[str, str, float], ...], bounds: tuple[float, float, float, float, float, float]) -> bool:
+    return all(_selector_clause_matches(clause, bounds) for clause in selector)
+
+
+def _selector_clause_matches(clause: tuple[str, str, float], bounds: tuple[float, float, float, float, float, float]) -> bool:
+    axis, op, value = clause
     index = {"x": 0, "y": 1, "z": 2}[axis]
     lo = bounds[index]
     hi = bounds[index + 3]
@@ -461,3 +506,42 @@ def _bounds(dim: int, tag: int) -> tuple[float, float, float, float, float, floa
 
 def _occ_bounds(dim: int, tag: int) -> tuple[float, float, float, float, float, float]:
     return tuple(float(value) for value in gmsh.model.occ.getBoundingBox(dim, tag))
+
+
+def _entity_dim_tag(entities: dict[str, GeometryEntityIR], name: str) -> tuple[int, int]:
+    entity = entities.get(name)
+    if entity is None:
+        raise MeshError(
+            [
+                Diagnostic(
+                    code="GEOMETRY_REFERENCE_INACTIVE",
+                    message=f"Geometry operation references inactive entity '{name}'.",
+                    path=("geometry", "entities"),
+                    source="geometry",
+                )
+            ]
+        )
+    return (entity.dim, entity.backend_tag)
+
+
+def _entity_dim_tags(entities: dict[str, GeometryEntityIR], names: tuple[str, ...]) -> list[tuple[int, int]]:
+    return [_entity_dim_tag(entities, name) for name in names]
+
+
+def _boolean_result(name: str, entity_type: str, result: tuple[Any, Any]) -> GeometryEntityIR:
+    out_dim_tags, _ = result
+    volumes = [(int(dim), int(tag)) for dim, tag in out_dim_tags if int(dim) == 3]
+    if len(volumes) != 1:
+        raise MeshError(
+            [
+                Diagnostic(
+                    code="GEOMETRY_BOOLEAN_RESULT_INVALID",
+                    message=f"Boolean entity '{name}' must produce one volume.",
+                    path=("geometry", "entities", name),
+                    source="geometry",
+                    payload={"volumes": volumes},
+                )
+            ]
+        )
+    dim, tag = volumes[0]
+    return GeometryEntityIR(name=name, type=entity_type, dim=dim, backend_tag=tag, bounds=_occ_bounds(dim, tag))

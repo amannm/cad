@@ -11,7 +11,7 @@ Name = Annotated[str, Field(min_length=1, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]
 Mode = Literal["linear_steady", "linear_transient", "nonlinear_steady", "nonlinear_transient"]
 CellType = Literal["tetrahedron", "hexahedron", "triangle", "quadrilateral", "interval"]
 FieldKind = Literal["scalar", "vector"]
-EntityType = Literal["box", "cylinder"]
+EntityType = Literal["box", "cylinder", "boolean_union", "boolean_cut"]
 TagNamespace = Literal["materials", "boundaries", "interfaces", "curves", "points"]
 StepPhase = Literal["open", "predict", "discretize", "update", "build", "solve", "accept", "commit", "fail"]
 OutputCadence = Annotated[str, Field(pattern=r"^(end|every_step|never|every_[1-9][0-9]*)$")]
@@ -33,6 +33,9 @@ class GeometryEntityInput(StrictModel):
     radius: Any | None = None
     height: Any | None = None
     axis: tuple[Any, ...] | None = None
+    entities: tuple[Name, ...] | None = None
+    base: Name | None = None
+    tools: tuple[Name, ...] | None = None
 
 
 class GeometryInput(StrictModel):
@@ -162,6 +165,9 @@ class GeometryEntitySpec(StrictModel):
     radius: QuantitySpec | None = None
     height: QuantitySpec | None = None
     axis: tuple[float, float, float] | None = None
+    entities: tuple[str, ...] = ()
+    base: str | None = None
+    tools: tuple[str, ...] = ()
 
 
 class GeometrySpec(StrictModel):

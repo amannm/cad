@@ -1,0 +1,69 @@
+name: perforated_plate
+mode: linear_steady
+units:
+  system: SI
+geometry:
+  backend: gmsh_occ
+  entities:
+    - type: box
+      name: body
+      size: ["0.10 m", "0.04 m", "0.01 m"]
+      origin: ["-0.05 m", "-0.02 m", "0 m"]
+    - type: cylinder
+      name: hole
+      radius: 0.008 m
+      height: 0.012 m
+    - type: boolean_cut
+      name: perforated_body
+      base: body
+      tools: [hole]
+tags:
+  materials:
+    aluminum:
+      dim: 3
+      entities: [perforated_body]
+  boundaries:
+    cold_left:
+      dim: 2
+      selector: "x == -0.05 m and z >= 0 m"
+    heat_top:
+      dim: 2
+      selector: "z == 0.01 m and y >= -0.02 m"
+fields:
+  - name: T
+    kind: scalar
+    unit: K
+    element:
+      family: Lagrange
+      order: 1
+materials:
+  aluminum:
+    model: isotropic_heat
+    parameters:
+      k: 205 W/(m*K)
+boundary_conditions:
+  - name: cold_left
+    on: cold_left
+    field: T
+    type: dirichlet
+    value: 300 K
+loads:
+  - name: heat_top
+    on: heat_top
+    field: T
+    type: flux
+    value: 5000 W/m^2
+mesh:
+  cell_type: tetrahedron
+  order: 1
+  size:
+    global: 0.006 m
+solver:
+  linear:
+    ksp_type: gmres
+    ksp_rtol: 1.0e-10
+    pc_type: gamg
+output:
+  format: vtx
+  fields: [T]
+  cadence: end

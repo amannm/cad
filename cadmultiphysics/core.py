@@ -231,6 +231,7 @@ def _semantic_diagnostics(raw: ProblemInput) -> list[Diagnostic]:
     field_set = set(field_names)
     for index, entity in enumerate(raw.geometry.entities):
         diagnostics.extend(_entity_diagnostics(entity, ("geometry", "entities", index)))
+    diagnostics.extend(_geometry_reference_diagnostics(raw.geometry.entities))
     for namespace, tags, expected_dim in (
         ("materials", raw.tags.materials, 3),
         ("boundaries", raw.tags.boundaries, 2),
@@ -394,13 +395,17 @@ def _entity_spec(entity: GeometryEntityInput, index: int) -> GeometryEntitySpec:
             size=canonical_quantity(entity.size, (*path, "size"), LENGTH),
             origin=canonical_quantity(entity.origin, (*path, "origin"), LENGTH) if entity.origin is not None else None,
         )
-    return GeometryEntitySpec(
-        type=entity.type,
-        name=entity.name,
-        radius=canonical_quantity(entity.radius, (*path, "radius"), LENGTH),
-        height=canonical_quantity(entity.height, (*path, "height"), LENGTH),
-        axis=_axis(entity.axis) if entity.axis is not None else None,
-    )
+    if entity.type == "cylinder":
+        return GeometryEntitySpec(
+            type=entity.type,
+            name=entity.name,
+            radius=canonical_quantity(entity.radius, (*path, "radius"), LENGTH),
+            height=canonical_quantity(entity.height, (*path, "height"), LENGTH),
+            axis=_axis(entity.axis) if entity.axis is not None else None,
+        )
+    if entity.type == "boolean_union":
+        return GeometryEntitySpec(type=entity.type, name=entity.name, entities=tuple(entity.entities or ()))
+    return GeometryEntitySpec(type=entity.type, name=entity.name, base=entity.base, tools=tuple(entity.tools or ()))
 
 
 def _field_spec(field: Any) -> FieldSpec:
@@ -571,8 +576,8 @@ def _entity_diagnostics(entity: GeometryEntityInput, path: tuple[str | int, ...]
             diagnostics.append(Diagnostic(code="GEOMETRY_BOX_SIZE_INVALID", message=f"Box '{entity.name}' requires a 3-vector size.", path=(*path, "size"), source="geometry"))
         if entity.origin is not None and len(entity.origin) != 3:
             diagnostics.append(Diagnostic(code="GEOMETRY_BOX_ORIGIN_INVALID", message=f"Box '{entity.name}' origin must be a 3-vector.", path=(*path, "origin"), source="geometry"))
-        if entity.radius is not None or entity.height is not None or entity.axis is not None:
-            diagnostics.append(Diagnostic(code="GEOMETRY_FIELD_INVALID", message=f"Box '{entity.name}' contains cylinder-only fields.", path=path, source="geometry"))
+        if entity.radius is not None or entity.height is not None or entity.axis is not None or entity.entities is not None or entity.base is not None or entity.tools is not None:
+            diagnostics.append(Diagnostic(code="GEOMETRY_FIELD_INVALID", message=f"Box '{entity.name}' contains fields for another geometry type.", path=path, source="geometry"))
     if entity.type == "cylinder":
         if entity.radius is None:
             diagnostics.append(Diagnostic(code="GEOMETRY_CYLINDER_RADIUS_REQUIRED", message=f"Cylinder '{entity.name}' requires radius.", path=(*path, "radius"), source="geometry"))
@@ -580,8 +585,53 @@ def _entity_diagnostics(entity: GeometryEntityInput, path: tuple[str | int, ...]
             diagnostics.append(Diagnostic(code="GEOMETRY_CYLINDER_HEIGHT_REQUIRED", message=f"Cylinder '{entity.name}' requires height.", path=(*path, "height"), source="geometry"))
         if entity.axis is not None and len(entity.axis) != 3:
             diagnostics.append(Diagnostic(code="GEOMETRY_CYLINDER_AXIS_INVALID", message=f"Cylinder '{entity.name}' axis must be a 3-vector.", path=(*path, "axis"), source="geometry"))
-        if entity.size is not None:
-            diagnostics.append(Diagnostic(code="GEOMETRY_FIELD_INVALID", message=f"Cylinder '{entity.name}' contains box-only fields.", path=path, source="geometry"))
+        if entity.size is not None or entity.origin is not None or entity.entities is not None or entity.base is not None or entity.tools is not None:
+            diagnostics.append(Diagnostic(code="GEOMETRY_FIELD_INVALID", message=f"Cylinder '{entity.name}' contains fields for another geometry type.", path=path, source="geometry"))
+    if entity.type == "boolean_union":
+        if entity.entities is None or len(entity.entities) < 2:
+            diagnostics.append(Diagnostic(code="GEOMETRY_BOOLEAN_OPERANDS_INVALID", message=f"Boolean union '{entity.name}' requires at least two entities.", path=(*path, "entities"), source="geometry"))
+        if entity.size is not None or entity.origin is not None or entity.radius is not None or entity.height is not None or entity.axis is not None or entity.base is not None or entity.tools is not None:
+            diagnostics.append(Diagnostic(code="GEOMETRY_FIELD_INVALID", message=f"Boolean union '{entity.name}' contains non-boolean fields.", path=path, source="geometry"))
+    if entity.type == "boolean_cut":
+        if entity.base is None:
+            diagnostics.append(Diagnostic(code="GEOMETRY_BOOLEAN_BASE_REQUIRED", message=f"Boolean cut '{entity.name}' requires base.", path=(*path, "base"), source="geometry"))
+        if entity.tools is None or not entity.tools:
+            diagnostics.append(Diagnostic(code="GEOMETRY_BOOLEAN_TOOLS_REQUIRED", message=f"Boolean cut '{entity.name}' requires tools.", path=(*path, "tools"), source="geometry"))
+        if entity.base is not None and entity.tools is not None and entity.base in entity.tools:
+            diagnostics.append(Diagnostic(code="GEOMETRY_BOOLEAN_OPERANDS_INVALID", message=f"Boolean cut '{entity.name}' base cannot also be a tool.", path=path, source="geometry"))
+        if entity.size is not None or entity.origin is not None or entity.radius is not None or entity.height is not None or entity.axis is not None or entity.entities is not None:
+            diagnostics.append(Diagnostic(code="GEOMETRY_FIELD_INVALID", message=f"Boolean cut '{entity.name}' contains non-boolean fields.", path=path, source="geometry"))
+    return diagnostics
+
+
+def _geometry_reference_diagnostics(entities: tuple[GeometryEntityInput, ...]) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    active: set[str] = set()
+    for index, entity in enumerate(entities):
+        path = ("geometry", "entities", index)
+        if entity.type in ("box", "cylinder"):
+            active.add(entity.name)
+            continue
+        if entity.type == "boolean_union":
+            references = tuple((name, (*path, "entities", operand_index)) for operand_index, name in enumerate(entity.entities or ()))
+        else:
+            reference_list = []
+            if entity.base is not None:
+                reference_list.append((entity.base, (*path, "base")))
+            reference_list.extend((name, (*path, "tools", tool_index)) for tool_index, name in enumerate(entity.tools or ()))
+            references = tuple(reference_list)
+        for operand, reference_path in references:
+            if operand not in active:
+                diagnostics.append(
+                    Diagnostic(
+                        code="GEOMETRY_REFERENCE_UNKNOWN",
+                        message=f"Geometry entity '{entity.name}' references inactive entity '{operand}'.",
+                        path=reference_path,
+                        source="geometry",
+                    )
+                )
+        active.difference_update(name for name, _ in references)
+        active.add(entity.name)
     return diagnostics
 
 

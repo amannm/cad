@@ -50,6 +50,14 @@ class GeometryBuilder:
         )
         return name
 
+    def boolean_union(self, name: str, *, entities: Iterable[str]) -> str:
+        self.entities.append({"type": "boolean_union", "name": name, "entities": tuple(entities)})
+        return name
+
+    def boolean_cut(self, name: str, *, base: str, tools: Iterable[str]) -> str:
+        self.entities.append({"type": "boolean_cut", "name": name, "base": base, "tools": tuple(tools)})
+        return name
+
 
 class Problem:
     def __init__(self, name: str) -> None:
