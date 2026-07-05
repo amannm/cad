@@ -1,107 +1,117 @@
 flowchart LR
-    CFG["Config\nuser input, units, preferences"]
-    VALIDCFG["Schema Validation\nPydantic models + JSON Schema\nstrict error locations"]
-    UNITS["Unit System\nPint registry, canonical base units,\ndimensional metadata"]
-    SPEC["ProblemSpec\ncanonical, normalized, hashable"]
-    MODEL["DomainModel IR\ngeometry refs, fields, materials,\nloads, BCs, interfaces"]
-    RUNPLAN["RunPlan\nmesh, solver, time, outputs,\ncheckpoint/restart policy"]
+    %% Compact CAD + multiphysics simulation architecture
+    %% Design emphasis: small stable IRs, explicit validation gates, no fallback/resilience layer.
 
-    CADAPI["CAD Kernel Adapter\ncompact internal API over CadQuery/OCC/Gmsh OCC"]
-    GEOM["GeometryModel\nB-rep + stable semantic names"]
-    TAGS["TagRegistry\nentity dim/id/name/material/interface\ncoverage + exclusivity policy"]
-    MESHPLAN["MeshPlan\nsize fields, order, boundary layers,\ncurvature, adapt/refine policy"]
-    MESH["SemanticMesh\nmesh + meshtags + CAD provenance"]
-    MESHQA["MeshQualityGate\nvalidity, orientation, tag coverage,\nquality metrics, repair/adapt decisions"]
+    subgraph Input[Input normalization]
+        CFG["User Config\nYAML / JSON / Python builder"]
+        SCHEMA["Schema Models\nPydantic strict models\nJSON Schema export"]
+        UNITS["Unit Normalization\nPint registry\ncanonical SI magnitudes\ndimensional checks"]
+        SPEC["ProblemSpec\ncanonical, immutable, hashable\nmode + physics + outputs"]
+    end
 
-    FIELDS["FieldRegistry\nunknowns, spaces, components, units"]
-    MAT["MaterialModel\nparameters, state variables, update law"]
-    PHYS["PhysicsPackage\nUFL forms, IC/BC/load schema,\ninvariants, derived outputs"]
-    COUPLE["CouplingGraph\nfield dependencies, block layout,\noperator ownership"]
-    DISCRETE["DiscreteModel\nspaces, measures, dofs, BC/load bindings"]
-    FORMCACHE["FormCompilerCache\nUFL/FFCx signatures, constants, kernels"]
+    subgraph Domain[Domain IR]
+        MODEL["DomainModel\ngeometry refs, fields, materials,\nBCs, loads, interfaces"]
+        MODE["ModeContract\nlinear steady\nlinear transient\nnonlinear steady\nnonlinear transient"]
+        STORE["ArtifactStore\ncontent-addressed inputs, IRs,\nmesh, forms, results, reports"]
+    end
 
-    ASSEMBLY["AssemblyPlan / AlgebraicSystem\nF,J,P,A,b,M, nullspaces, BC application,\nMatNest/AIJ layout, reuse policy"]
-    STATE["StateStore\ncurrent/trial/history/material state\ntransactions + commit/rollback"]
-    STEPPER["Stepper\nsteady/transient/adaptive dt/load ramp/continuation"]
-    PROFILE["SolverProfile\nPETSc prefix tree, KSP/SNES/PC,\nfieldsplit and fallback policy"]
-    SOLVER["SolverDriver\none algebraic solve"]
-    DIAG["Diagnostics\nresiduals, iterations, conservation checks,\nfallbacks, timings, option snapshot"]
+    subgraph GeometryMesh[Geometry and mesh]
+        GEOMAPI["Geometry API\nsmall internal B-rep protocol\nCadQuery/OCP or Gmsh OCC adapter"]
+        GEOM["GeometryModel\nB-rep + stable semantic names\nface/edge/volume handles"]
+        TAGS["Semantic Tags\nphysical groups / regions\nmaterial + boundary + interface labels"]
+        MESHPLAN["MeshPlan\ncell type, order, size fields,\ncurvature, boundary layers"]
+        MESHGEN["MeshGenerator\nGmsh adapter\nexport mesh + tags"]
+        MESH["SemanticMesh\nDOLFINx mesh, meshtags,\nCAD provenance, partitions"]
+        MESHVALID["MeshValidation\norientation, tag coverage,\nquality thresholds"]
+    end
 
-    OUTPUTPLAN["OutputPlan\nfields, probes, cadence, format"]
-    POST["Postprocess\nprobes, integrals, derived fields"]
-    VIZ["VisualizationBundle\nmesh, fields, tags, time metadata"]
-    INSITU["InSituHook optional\nParaView Catalyst adapter"]
+    subgraph Physics[Physics compilation]
+        FIELDS["FieldRegistry\nunknowns, components, units,\nelement family/order"]
+        MATERIALS["MaterialRegistry\nparameters, constitutive state,\nupdate hooks"]
+        PHYS["PhysicsPackage\nUFL residuals/bilinears,\nIC/BC/load schemas, invariants"]
+        COUPLING["CouplingGraph\nfield dependencies\nblock ownership"]
+        SPACES["SpaceBuilder\nBasix/UFL elements\nmixed spaces, subspaces"]
+        DISCRETE["DiscreteModel\nspaces, measures, dofs,\nBC/load/material bindings"]
+        FORMS["FormCache\nUFL + element + quadrature +\ncompiler/runtime signature"]
+    end
 
-    CKPTCTRL["CheckpointController\nADIOS2/HDF5 backend, cadence,\natomic write, retention"]
-    CKPT["CheckpointPayload\nstate/history/time/material variables"]
-    RESTART["RestartContract\nstrict compatibility manifest:\nspec/mesh/forms/versions/partitioning"]
-    STORE["ArtifactStore\ncontent-addressed artifacts + provenance DAG"]
-    REPORT["RunReport\nstatus, convergence, warnings, hashes"]
-    VALID["Validation Gates\nschema, geometry, tags, mesh, physics,\nforms, solver, restart, outputs"]
+    subgraph Algebra[Algebra and solve]
+        ALG["AlgebraicSystem\nF/J or A/b/M/P\nnullspaces, block maps, BC policy"]
+        PROFILE["SolverProfile\nPETSc option prefix tree\nKSP/SNES/PC/FieldSplit"]
+        DRIVER["SolverDriver\nexecute one algebraic solve"]
+        STEP["Stepper\nsteady, transient, load/time loop\nmode-specific assembly order"]
+        STATE["StateStore\ncurrent, trial, history,\nmaterial variables"]
+        DIAG["Diagnostics\nresiduals, iterations, timings,\nconservation/invariant checks"]
+    end
 
-    CFG --> VALIDCFG --> UNITS --> SPEC
+    subgraph IO[Output and restart]
+        OUTPLAN["OutputPlan\nfields, probes, integrals,\ncadence, format"]
+        POST["Postprocess\nprojection, derived fields,\nprobes, global integrals"]
+        RESULTS["ResultWriters\nADIOS2/VTX, XDMF/HDF5,\nCSV/JSON reports"]
+        CATALYST["InSitu Adapter optional\nParaView Catalyst pipeline"]
+        CKPT["Checkpoint\nstate, history, time, mesh ids,\nmanifest hashes"]
+        REPORT["RunReport\nstatus, convergence, warnings,\nartifact hashes, versions"]
+    end
+
+    subgraph Gates[Validation gates]
+        VALID["ValidationGates\nschema, units, geometry, tags, mesh,\nphysics forms, solver profile, outputs"]
+    end
+
+    CFG --> SCHEMA --> UNITS --> SPEC
     SPEC --> MODEL
-    SPEC --> RUNPLAN
-    MODEL --> CADAPI --> GEOM
-    GEOM --> TAGS
-    RUNPLAN --> MESHPLAN
-    GEOM --> MESHPLAN --> MESH
-    TAGS --> MESH
-    MESH --> MESHQA
-    MESHQA -->|accept| DISCRETE
-    MESHQA -->|repair/adapt| MESHPLAN
-
+    SPEC --> MODE
+    SPEC --> STORE
+    MODEL --> GEOMAPI --> GEOM --> TAGS
     MODEL --> FIELDS
-    MODEL --> MAT
-    FIELDS --> PHYS
-    MAT --> PHYS
-    PHYS --> COUPLE
-    FIELDS --> DISCRETE
+    MODEL --> MATERIALS
+    MODEL --> PHYS
+    MODE --> PHYS
+
+    GEOM --> MESHPLAN
+    TAGS --> MESHPLAN
+    MESHPLAN --> MESHGEN --> MESH --> MESHVALID --> DISCRETE
     TAGS --> DISCRETE
+
+    FIELDS --> SPACES --> DISCRETE
+    MATERIALS --> PHYS
+    PHYS --> COUPLING
     PHYS --> DISCRETE
-    DISCRETE --> FORMCACHE --> ASSEMBLY
-    COUPLE --> ASSEMBLY
-    PHYS --> ASSEMBLY
-    STATE --> ASSEMBLY
+    DISCRETE --> FORMS
+    COUPLING --> ALG
+    FORMS --> ALG
+    STATE --> ALG
+    MODE --> STEP
+    STEP --> ALG
+    PROFILE --> DRIVER
+    ALG --> DRIVER --> STATE
+    DRIVER --> DIAG
+    STEP --> DIAG
 
-    RUNPLAN --> STEPPER
-    STEPPER --> ASSEMBLY
-    PROFILE --> SOLVER
-    ASSEMBLY --> SOLVER
-    SOLVER --> STATE
-    SOLVER --> DIAG
-    STEPPER --> DIAG
-    ASSEMBLY --> DIAG
-
-    RUNPLAN --> OUTPUTPLAN
+    OUTPLAN --> POST
     STATE --> POST
     PHYS --> POST
-    OUTPUTPLAN --> POST --> VIZ
-    POST --> INSITU
-
-    STATE --> CKPTCTRL --> CKPT --> RESTART
-    SPEC --> RESTART
-    RUNPLAN --> RESTART
-    MESH --> RESTART
-    PHYS --> RESTART
-    FORMCACHE --> RESTART
-
-    SPEC --> STORE
-    RUNPLAN --> STORE
-    GEOM --> STORE
-    TAGS --> STORE
-    MESH --> STORE
-    FORMCACHE --> STORE
-    CKPT --> STORE
-    VIZ --> STORE
+    POST --> RESULTS
+    POST --> CATALYST
+    STATE --> CKPT
+    MESH --> CKPT
+    SPEC --> CKPT
     DIAG --> REPORT
+    RESULTS --> REPORT
+    CKPT --> REPORT
     STORE --> REPORT
-    RESTART --> REPORT
 
-    VALID -.-> VALIDCFG
+    STORE -.-> GEOM
+    STORE -.-> MESH
+    STORE -.-> FORMS
+    STORE -.-> RESULTS
+    STORE -.-> CKPT
+
+    VALID -.-> SCHEMA
+    VALID -.-> UNITS
+    VALID -.-> GEOM
     VALID -.-> TAGS
-    VALID -.-> MESHQA
+    VALID -.-> MESHVALID
     VALID -.-> DISCRETE
     VALID -.-> PHYS
-    VALID -.-> ASSEMBLY
-    VALID -.-> RESTART
+    VALID -.-> PROFILE
+    VALID -.-> OUTPLAN

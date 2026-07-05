@@ -1,50 +1,69 @@
 flowchart TD
-    RUNPLAN["RunPlan\nmode, time policy, output cadence,\ncheckpoint cadence, restart"]
-    STEPPER["Stepper\nsteady / transient / adaptive dt /\nload ramp / continuation"]
-    PHYS["PhysicsPackage\nforms, materials, invariants"]
-    DISCRETE["DiscreteModel\nspaces, dofs, measures, BC/load bindings"]
-    STATE["StateStore\ncommitted, trial, history, material vars"]
-    TXN["StateTransaction\nbegin trial step, commit, rollback"]
-    ASSEMBLY["AssemblyPlan / AlgebraicSystem\nassemble F,J,P,A,b,M\nBCs, nullspaces, block layout"]
-    PROFILE["SolverProfile\nPETSc prefix tree, SNES/KSP/PC options,\nfieldsplit and fallback policy"]
-    DRIVER["SolverDriver\nsolve one algebraic system"]
-    CHECKS["AcceptanceChecks\nconvergence, invariant residuals,\nNaN/Inf, step-size constraints"]
-    DIAG["Diagnostics\nresiduals, iterations, monitors,\nfailed steps, timings, PETSc options"]
-    ACCEPT{"Accept step?"}
-    COMMIT["commit state\nwrite outputs/checkpoint if due"]
-    ROLLBACK["rollback state\nadapt dt / change profile / abort"]
-    FALLBACK["FallbackPolicy\nlinearization retry, damping, dt cut,\nalternate PC/KSP/SNES"]
-    CKPTCTRL["CheckpointController\natomic checkpoint + retention"]
-    CKPT["CheckpointPayload + RestartContract"]
-    OUTPLAN["OutputPlan\nfields/probes/cadence/format"]
-    OUT["Solution outputs"]
-    POST["Postprocess\nprobes, integrals, derived fields"]
-    VIZ["VisualizationBundle"]
-    REPORT["RunReport"]
+    %% Solver execution architecture
+    %% Explicitly covers the four required modes without fallback/resilience behavior.
 
-    RUNPLAN --> STEPPER
-    RUNPLAN --> OUTPLAN
-    STEPPER --> TXN
-    STATE --> TXN
-    TXN --> ASSEMBLY
-    PHYS --> ASSEMBLY
-    DISCRETE --> ASSEMBLY
-    PROFILE --> DRIVER
-    ASSEMBLY --> DRIVER
-    DRIVER --> CHECKS
-    PHYS --> CHECKS
-    CHECKS --> ACCEPT
-    DRIVER --> DIAG
-    CHECKS --> DIAG
+    RUN["RunPlan\nmode, time grid/load schedule,\noutput cadence, checkpoint cadence"]
+    MODE{"Solver mode"}
 
-    ACCEPT -->|yes| COMMIT
-    ACCEPT -->|no| ROLLBACK
-    ROLLBACK --> FALLBACK --> STEPPER
-    COMMIT --> STATE
-    COMMIT --> OUT
-    COMMIT --> CKPTCTRL --> CKPT
-    OUTPLAN --> OUT
-    OUT --> POST --> VIZ
-    DIAG --> REPORT
+    LS["Linear Steady\nassemble A,b once\nKSP solve"]
+    LT["Linear Transient\nassemble M,A,b per step as needed\nKSP solve"]
+    NS["Nonlinear Steady\nassemble F,J\nSNES solve"]
+    NT["Nonlinear Transient\nadvance time, assemble F,J\nSNES solve per step"]
+
+    subgraph Shared[Shared solve pipeline]
+        PREP["PrepareStep\nopen trial state\napply time/load parameters"]
+        ASSEMBLE["AssemblyPlan\nforms, constants, coefficients,\nBCs, nullspaces, block layout"]
+        ALG["AlgebraicSystem\nA,b or F,J,P\nMatNest/AIJ choice"]
+        PROFILE["SolverProfile\nPETSc options by prefix\nKSP/SNES/PC/FieldSplit"]
+        SOLVE["SolverDriver\nexecute solve\nrecord PETSc status"]
+        CHECK["AcceptanceChecks\nconverged reason, finite values,\nresidual/invariant thresholds"]
+        DECIDE{"Accepted?"}
+        COMMIT["CommitStep\ncommit state/history\nadvance stepper"]
+        FAIL["FailFast\nrollback trial state\nstop run with diagnostic report"]
+    end
+
+    subgraph State[State and data]
+        DMODEL["DiscreteModel\nspaces, dofs, measures,\nBC/load bindings"]
+        PHYS["PhysicsPackage\nUFL forms, material updates,\ninvariants"]
+        STATESTORE["StateStore\ncommitted, trial, history,\nmaterial variables"]
+        FORMCACHE["FormCache\ncompiled UFL kernels\nversioned signatures"]
+    end
+
+    subgraph Output[Outputs]
+        OUTPLAN["OutputPlan\nfields, probes, cadence, format"]
+        POST["Postprocess\nprobes, integrals, derived fields"]
+        WRITE["Writers\nADIOS2/VTX, XDMF/HDF5, CSV/JSON"]
+        CKPT["Checkpoint\nstate + history + manifest hashes"]
+        REPORT["RunReport\nmode, status, convergence,\niterations, timings, versions"]
+    end
+
+    RUN --> MODE
+    MODE -->|linear steady| LS --> PREP
+    MODE -->|linear transient| LT --> PREP
+    MODE -->|nonlinear steady| NS --> PREP
+    MODE -->|nonlinear transient| NT --> PREP
+
+    STATESTORE --> PREP
+    PREP --> ASSEMBLE
+    DMODEL --> ASSEMBLE
+    PHYS --> ASSEMBLE
+    FORMCACHE --> ASSEMBLE
+    ASSEMBLE --> ALG
+    ALG --> SOLVE
+    PROFILE --> SOLVE
+    SOLVE --> CHECK
+    PHYS --> CHECK
+    CHECK --> DECIDE
+    DECIDE -->|yes| COMMIT
+    DECIDE -->|no| FAIL
+    COMMIT --> STATESTORE
+    COMMIT --> POST
+    OUTPLAN --> POST --> WRITE
+    COMMIT --> CKPT
+    SOLVE --> REPORT
+    CHECK --> REPORT
+    WRITE --> REPORT
     CKPT --> REPORT
-    VIZ --> REPORT
+    FAIL --> REPORT
+
+    COMMIT -->|next transient step if any| PREP
