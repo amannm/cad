@@ -63,8 +63,9 @@ output:
   format: vtx
   fields: [T]
   cadence: every_step
+  restart_cadence: every_step
 time:
   start: 0 s
-  stop: 0.03 s
+  stop: 0.10 s
   step: 0.01 s
   scheme: backward_euler

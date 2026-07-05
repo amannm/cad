@@ -58,39 +58,9 @@ def solve(problem: str, out: str, overwrite: bool = False) -> CommandResult:
 
 
 def solve_spec(spec: ProblemSpec, out: str, overwrite: bool = False) -> CommandResult:
-    from cadmultiphysics.solver import execute_solve
-
     run_dir = Path(out).resolve()
     _prepare_run_dir(run_dir, overwrite)
-    domain, plan, manifest, artifacts = _problem_artifacts(spec, run_dir, "solve")
-    diagnostics: tuple[Diagnostic, ...] = ()
-    state: SolutionState | None = None
-    steps: tuple[StepRecord, ...] = ()
-    exit_code = 0
-    try:
-        build = generate_mesh(spec, run_dir / "mesh")
-        _write_mesh_artifacts(build.metadata, build.artifacts)
-        artifacts.update({name: _artifact(path) for name, path in build.artifacts.items()})
-        discrete_path = _write_discrete_artifact(build_discrete_plan(spec, build.metadata), run_dir)
-        artifacts["discrete_plan"] = _artifact(discrete_path)
-        result = execute_solve(spec, plan, build.metadata, run_dir)
-        artifacts.update({name: _artifact(path) for name, path in result.artifacts.items()})
-        diagnostics = result.diagnostics
-        state = result.state
-        steps = result.steps
-        exit_code = result.exit_code
-        manifest = _write_manifest(spec, run_dir, artifacts)
-        artifacts["manifest"] = _artifact(run_dir / "manifest.json")
-        restart_path = run_dir / "restarts" / "restart_0000.json"
-        restart_state = _solve_restart_state(spec, manifest, artifacts["manifest"].sha256, result.state, artifacts)
-        write_json(restart_path, restart_state.model_dump(mode="json"))
-        artifacts["restart_0000"] = _artifact(restart_path)
-    except (DiscretizationError, MeshError) as exc:
-        diagnostics = tuple(exc.diagnostics)
-        exit_code = 1
-        manifest = _write_manifest(spec, run_dir, artifacts)
-        artifacts["manifest"] = _artifact(run_dir / "manifest.json")
-    return _finish_problem_command("solve", spec, domain, plan, manifest, artifacts, diagnostics, run_dir, exit_code, state, steps)
+    return _solve_problem_command("solve", spec, run_dir, None)
 
 
 def restart(restart_path: str, out: str, overwrite: bool = False) -> CommandResult:
@@ -104,29 +74,70 @@ def restart(restart_path: str, out: str, overwrite: bool = False) -> CommandResu
         report = _restart_report(None, artifacts, state)
         write_json(run_dir / "report.json", report.model_dump(mode="json"))
         return CommandResult(report, 1)
-    state_path = run_dir / "restart_state.json"
-    write_json(state_path, state.model_dump(mode="json"))
-    artifacts["restart_state"] = _artifact(state_path)
     diagnostics = _restart_diagnostics(state, source)
-    if not diagnostics:
-        diagnostics = (
-            Diagnostic(
-                code="RESTART_BACKEND_NOT_IMPLEMENTED",
-                message="Restart solve execution is not implemented.",
-                path=("restart",),
-                source="restart",
-            ),
-        )
-    _write_diagnostics_artifact(run_dir, artifacts, diagnostics)
-    report = _restart_report(state, artifacts, diagnostics)
-    write_json(run_dir / "report.json", report.model_dump(mode="json"))
-    return CommandResult(report, 2)
+    if diagnostics:
+        state_path = run_dir / "restart_state.json"
+        write_json(state_path, state.model_dump(mode="json"))
+        artifacts["restart_state"] = _artifact(state_path)
+        _write_diagnostics_artifact(run_dir, artifacts, diagnostics)
+        report = _restart_report(state, artifacts, diagnostics)
+        write_json(run_dir / "report.json", report.model_dump(mode="json"))
+        return CommandResult(report, 1)
+    spec = _load_restart_spec(state, source)
+    if isinstance(spec, tuple):
+        _write_diagnostics_artifact(run_dir, artifacts, spec)
+        report = _restart_report(state, artifacts, spec)
+        write_json(run_dir / "report.json", report.model_dump(mode="json"))
+        return CommandResult(report, 1)
+    solution = _load_restart_solution_state(state, source)
+    if isinstance(solution, tuple):
+        _write_diagnostics_artifact(run_dir, artifacts, solution)
+        report = _restart_report(state, artifacts, solution)
+        write_json(run_dir / "report.json", report.model_dump(mode="json"))
+        return CommandResult(report, 1)
+    return _solve_problem_command("restart", spec, run_dir, solution)
+
+
+def _solve_problem_command(
+    command: Literal["solve", "restart"],
+    spec: ProblemSpec,
+    run_dir: Path,
+    initial_state: SolutionState | None,
+) -> CommandResult:
+    from cadmultiphysics.solver import execute_solve
+
+    domain, plan, manifest, artifacts = _problem_artifacts(spec, run_dir, command)
+    diagnostics: tuple[Diagnostic, ...] = ()
+    state: SolutionState | None = None
+    steps: tuple[StepRecord, ...] = ()
+    exit_code = 0
+    try:
+        build = generate_mesh(spec, run_dir / "mesh")
+        _write_mesh_artifacts(build.metadata, build.artifacts)
+        artifacts.update({name: _artifact(path) for name, path in build.artifacts.items()})
+        discrete_path = _write_discrete_artifact(build_discrete_plan(spec, build.metadata), run_dir)
+        artifacts["discrete_plan"] = _artifact(discrete_path)
+        result = execute_solve(spec, plan, build.metadata, run_dir, initial_state)
+        artifacts.update({name: _artifact(path) for name, path in result.artifacts.items()})
+        diagnostics = result.diagnostics
+        state = result.state
+        steps = result.steps
+        exit_code = result.exit_code
+        manifest = _write_manifest(spec, run_dir, artifacts)
+        artifacts["manifest"] = _artifact(run_dir / "manifest.json")
+        _write_solve_restart_artifacts(spec, manifest, artifacts["manifest"].sha256, result.state, result.restart_states, artifacts, run_dir)
+    except (DiscretizationError, MeshError) as exc:
+        diagnostics = tuple(exc.diagnostics)
+        exit_code = 1
+        manifest = _write_manifest(spec, run_dir, artifacts)
+        artifacts["manifest"] = _artifact(run_dir / "manifest.json")
+    return _finish_problem_command(command, spec, domain, plan, manifest, artifacts, diagnostics, run_dir, exit_code, state, steps)
 
 
 def _problem_artifacts(
     spec: ProblemSpec,
     run_dir: Path,
-    command: Literal["mesh", "solve"],
+    command: Literal["mesh", "solve", "restart"],
 ) -> tuple[DomainIR, RunPlan, RunManifest, dict[str, RunArtifact]]:
     _ensure_run_dirs(run_dir)
     domain = build_domain_ir(spec)
@@ -141,7 +152,7 @@ def _problem_artifacts(
     write_json(files["domain"], domain.model_dump(mode="json"))
     write_json(files["run_plan"], plan.model_dump(mode="json"))
     write_json(files["mesh_plan"], spec.mesh.model_dump(mode="json"))
-    if command == "solve":
+    if command != "mesh":
         files["solver_profile"] = run_dir / "logs" / "solver_profile.json"
         write_json(files["solver_profile"], spec.solver.model_dump(mode="json"))
     artifacts = {name: _artifact(path) for name, path in files.items()}
@@ -185,7 +196,7 @@ def _mesh_restart_state(
         fields=tuple(field.name for field in spec.fields),
         step_index=0,
         time=spec.time.start if spec.time else None,
-        artifacts=_restart_artifacts(artifacts, ("model_msh", "mesh_metadata", "tag_map", "geometry_ir", "discrete_plan")),
+        artifacts=_restart_artifacts(artifacts, ("spec", "run_plan", "model_msh", "mesh_metadata", "tag_map", "geometry_ir", "discrete_plan")),
     )
 
 
@@ -195,6 +206,7 @@ def _solve_restart_state(
     manifest_hash: str,
     state: SolutionState,
     artifacts: dict[str, RunArtifact],
+    state_artifact: str = "solution_state",
 ) -> RestartState:
     return RestartState(
         schema_version=spec.version,
@@ -206,12 +218,33 @@ def _solve_restart_state(
         step_index=state.committed_step,
         time=_state_time(state),
         state_hash=state.state_hash,
-        artifacts=_restart_artifacts(artifacts, ("model_msh", "mesh_metadata", "tag_map", "geometry_ir", "discrete_plan", "solution_state")),
+        artifacts=_restart_artifacts(artifacts, ("spec", "run_plan", "model_msh", "mesh_metadata", "tag_map", "geometry_ir", "discrete_plan", state_artifact)),
     )
 
 
+def _write_solve_restart_artifacts(
+    spec: ProblemSpec,
+    manifest: RunManifest,
+    manifest_hash: str,
+    state: SolutionState,
+    restart_states: tuple[SolutionState, ...],
+    artifacts: dict[str, RunArtifact],
+    run_dir: Path,
+) -> None:
+    restart_path = run_dir / "restarts" / "restart_0000.json"
+    restart_state = _solve_restart_state(spec, manifest, manifest_hash, state, artifacts)
+    write_json(restart_path, restart_state.model_dump(mode="json"))
+    artifacts["restart_0000"] = _artifact(restart_path)
+    for restart_solution in restart_states:
+        state_artifact = f"solution_state_{restart_solution.committed_step:04d}"
+        restart_path = run_dir / "restarts" / f"restart_{restart_solution.committed_step:04d}.json"
+        restart_state = _solve_restart_state(spec, manifest, manifest_hash, restart_solution, artifacts, state_artifact)
+        write_json(restart_path, restart_state.model_dump(mode="json"))
+        artifacts[f"restart_{restart_solution.committed_step:04d}"] = _artifact(restart_path)
+
+
 def _finish_problem_command(
-    command: Literal["mesh", "solve"],
+    command: Literal["mesh", "solve", "restart"],
     spec: ProblemSpec,
     domain: DomainIR,
     plan: RunPlan,
@@ -294,6 +327,108 @@ def _load_restart_state(source: Path) -> RestartState | tuple[Diagnostic, ...]:
             )
             for diagnostic in schema_diagnostics(exc)
         )
+
+
+def _load_restart_spec(state: RestartState, source: Path) -> ProblemSpec | tuple[Diagnostic, ...]:
+    path_value = state.artifacts.get("spec")
+    if path_value is None:
+        return (
+            Diagnostic(
+                code="RESTART_SPEC_MISSING",
+                message="Restart metadata does not reference a canonical spec artifact.",
+                path=("artifacts", "spec"),
+                source="restart",
+            ),
+        )
+    spec_path = _restart_artifact_path(path_value, source)
+    try:
+        payload = json.loads(spec_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return (
+            Diagnostic(
+                code="RESTART_SPEC_READ_FAILED",
+                message=f"Could not read restart spec '{spec_path}'.",
+                path=("artifacts", "spec"),
+                source="restart",
+                backend_error=str(exc),
+            ),
+        )
+    try:
+        spec = ProblemSpec.model_validate(payload)
+    except ValidationError as exc:
+        return tuple(
+            Diagnostic(
+                code="RESTART_SPEC_INVALID",
+                message=diagnostic.message,
+                path=("artifacts", "spec", *diagnostic.path),
+                source="restart",
+                backend_error=diagnostic.backend_error,
+            )
+            for diagnostic in schema_diagnostics(exc)
+        )
+    if spec.content_hash != state.content_hash:
+        return (
+            Diagnostic(
+                code="RESTART_SPEC_HASH_MISMATCH",
+                message="Restart spec content hash does not match restart metadata.",
+                path=("content_hash",),
+                source="restart",
+                payload={"expected": state.content_hash, "observed": spec.content_hash},
+            ),
+        )
+    return spec
+
+
+def _load_restart_solution_state(state: RestartState, source: Path) -> SolutionState | None | tuple[Diagnostic, ...]:
+    if state.state_hash is None:
+        return None
+    artifact_name = _restart_solution_state_artifact(state)
+    if artifact_name is None:
+        return (
+            Diagnostic(
+                code="RESTART_STATE_ARTIFACT_MISSING",
+                message="Restart state hash requires a solution-state artifact.",
+                path=("artifacts",),
+                source="restart",
+            ),
+        )
+    state_path = _restart_artifact_path(state.artifacts[artifact_name], source)
+    try:
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return (
+            Diagnostic(
+                code="RESTART_STATE_READ_FAILED",
+                message=f"Could not read restart solution state '{state_path}'.",
+                path=("artifacts", artifact_name),
+                source="restart",
+                backend_error=str(exc),
+            ),
+        )
+    try:
+        solution = SolutionState.model_validate(payload)
+    except ValidationError as exc:
+        return tuple(
+            Diagnostic(
+                code="RESTART_STATE_INVALID",
+                message=diagnostic.message,
+                path=("artifacts", artifact_name, *diagnostic.path),
+                source="restart",
+                backend_error=diagnostic.backend_error,
+            )
+            for diagnostic in schema_diagnostics(exc)
+        )
+    if solution.state_hash != state.state_hash:
+        return (
+            Diagnostic(
+                code="RESTART_STATE_HASH_MISMATCH",
+                message="Restart state hash does not match committed solution state.",
+                path=("state_hash",),
+                source="restart",
+                payload={"expected": state.state_hash, "observed": solution.state_hash},
+            ),
+        )
+    return solution
 
 
 def _restart_diagnostics(state: RestartState, source: Path) -> tuple[Diagnostic, ...]:
@@ -403,8 +538,8 @@ def _restart_diagnostics(state: RestartState, source: Path) -> tuple[Diagnostic,
                     )
                 )
     if state.state_hash is not None:
-        state_path_value = state.artifacts.get("solution_state")
-        if state_path_value is None:
+        state_artifact = _restart_solution_state_artifact(state)
+        if state_artifact is None:
             diagnostics.append(
                 Diagnostic(
                     code="RESTART_STATE_ARTIFACT_MISSING",
@@ -414,8 +549,15 @@ def _restart_diagnostics(state: RestartState, source: Path) -> tuple[Diagnostic,
                 )
             )
         else:
-            diagnostics.extend(_solution_state_restart_diagnostics(state, _restart_artifact_path(state_path_value, source)))
+            diagnostics.extend(_solution_state_restart_diagnostics(state, _restart_artifact_path(state.artifacts[state_artifact], source)))
     return tuple(diagnostics)
+
+
+def _restart_solution_state_artifact(state: RestartState) -> str | None:
+    if "solution_state" in state.artifacts:
+        return "solution_state"
+    step_artifact = f"solution_state_{state.step_index:04d}"
+    return step_artifact if step_artifact in state.artifacts else None
 
 
 def _solution_state_restart_diagnostics(state: RestartState, state_path: Path) -> list[Diagnostic]:

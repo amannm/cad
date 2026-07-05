@@ -28,12 +28,14 @@ class SolverResult:
     steps: tuple[StepRecord, ...]
     diagnostics: tuple[Diagnostic, ...]
     artifacts: dict[str, Path]
+    restart_states: tuple[SolutionState, ...]
     exit_code: int
 
 
 @dataclass(frozen=True)
 class StepSolve:
     field_state: dict[str, Any]
+    history_state: dict[str, Any]
     artifacts: dict[str, Path]
     payload: dict[str, Any]
 
@@ -95,19 +97,21 @@ class ThermoelasticContext:
 
 
 class StepController:
-    def __init__(self, spec: ProblemSpec, plan: RunPlan, mesh: MeshMetadata, run_dir: Path) -> None:
+    def __init__(self, spec: ProblemSpec, plan: RunPlan, mesh: MeshMetadata, run_dir: Path, initial_state: SolutionState | None = None) -> None:
         self.spec = spec
         self.plan = plan
         self.mesh = mesh
         self.run_dir = run_dir
+        self.initial_state = initial_state
         self.artifacts: dict[str, Path] = {}
+        self.restart_states: list[SolutionState] = []
         self.transient_scalar_heat: TransientScalarHeatContext | None = None
         self.thermoelastic: ThermoelasticContext | None = None
 
     def run(self) -> SolverResult:
         started = perf_counter()
         self._ensure_dirs()
-        committed = initial_solution_state(self.spec, self.plan)
+        committed = _prepared_initial_state(self.initial_state) if self.initial_state is not None else initial_solution_state(self.spec, self.plan)
         self._write_artifact("solution_state", self.run_dir / "restarts" / "state_committed.json", committed.model_dump(mode="json"))
         steps: list[StepRecord] = []
         diagnostics: list[Diagnostic] = []
@@ -135,10 +139,17 @@ class StepController:
                     diagnostics.append(diagnostic)
                     self._write_artifact(f"step_{record.index:04d}", self.run_dir / "logs" / f"step_{record.index:04d}.json", record.model_dump(mode="json"))
                     break
-                solved_trial = _hashed_state(trial.model_copy(update={"field_state": solve.field_state, "state_hash": ""}))
+                solved_trial = _hashed_state(trial.model_copy(update={"field_state": solve.field_state, "history_state": solve.history_state, "state_hash": ""}))
                 committed = commit_trial_state(solved_trial)
                 self.artifacts.update(solve.artifacts)
                 self._write_artifact("solution_state", self.run_dir / "restarts" / "state_committed.json", committed.model_dump(mode="json"))
+                if committed.committed_step in self.plan.restart_steps:
+                    self.restart_states.append(committed)
+                    self._write_artifact(
+                        f"solution_state_{committed.committed_step:04d}",
+                        self.run_dir / "restarts" / f"state_{committed.committed_step:04d}.json",
+                        committed.model_dump(mode="json"),
+                    )
                 record = StepRecord(
                     index=committed.committed_step,
                     status="accepted",
@@ -176,6 +187,7 @@ class StepController:
             steps=tuple(steps),
             diagnostics=tuple(diagnostics),
             artifacts=dict(self.artifacts),
+            restart_states=tuple(self.restart_states),
             exit_code=1 if diagnostics else 0,
         )
 
@@ -228,7 +240,7 @@ class StepController:
             raise RuntimeError(f"PETSc SNES did not converge: {reason}")
         _assert_finite(context.solution)
         _update_output_functions(context)
-        field_state = {field: _field_summary(context.domain, function) for field, function in sorted(context.output_functions.items())}
+        field_state = {field: _field_state(context.domain, function) for field, function in sorted(context.output_functions.items())}
         context.previous.x.array[:] = context.solution.x.array
         context.previous.x.scatter_forward()
         artifacts: dict[str, Path] = {}
@@ -249,7 +261,7 @@ class StepController:
             "theta": _theta(self.spec) if self.plan.transient else None,
             "elapsed_seconds": perf_counter() - started,
         }
-        return StepSolve(field_state=field_state, artifacts=artifacts, payload=payload)
+        return StepSolve(field_state=field_state, history_state={"mixed_state": _array_values(context.solution.x.array)}, artifacts=artifacts, payload=payload)
 
     def _solve_linear_transient_scalar(self, trial: SolutionState, field_name: str) -> StepSolve:
         started = perf_counter()
@@ -288,7 +300,7 @@ class StepController:
         _assert_finite(context.solution)
         context.previous.x.array[:] = context.solution.x.array
         context.previous.x.scatter_forward()
-        field_state = {field_name: _field_summary(context.domain, context.solution)}
+        field_state = {field_name: _field_state(context.domain, context.solution)}
         artifacts: dict[str, Path] = {}
         if self.spec.output.format == "vtx" and step in self.plan.output_steps:
             if context.writer is None:
@@ -296,7 +308,7 @@ class StepController:
             context.writer.write(float(trial.time or 0.0))
             artifacts["solution_fields"] = context.output_path
         payload = {"reason": reason, "iterations": iterations, "residual_norm": norm, "dt": dt, "theta": theta, "elapsed_seconds": perf_counter() - started}
-        return StepSolve(field_state=field_state, artifacts=artifacts, payload=payload)
+        return StepSolve(field_state=field_state, history_state={}, artifacts=artifacts, payload=payload)
 
     def _transient_scalar_heat_context(self, field_name: str) -> TransientScalarHeatContext:
         if self.transient_scalar_heat is not None:
@@ -311,7 +323,11 @@ class StepController:
         V = fem.functionspace(domain, ("Lagrange", _field_order(self.spec, field_name)))
         previous = fem.Function(V)
         previous.name = f"{field_name}_previous"
-        previous.x.array[:] = PETSc.ScalarType(_initial_scalar(self.spec, field_name))
+        restart_values = _restart_field_values(self.initial_state, field_name)
+        if restart_values is None:
+            previous.x.array[:] = PETSc.ScalarType(_initial_scalar(self.spec, field_name))
+        else:
+            _restore_array(previous.x.array, restart_values)
         previous.x.scatter_forward()
         solution = fem.Function(V)
         solution.name = field_name
@@ -360,7 +376,11 @@ class StepController:
             output.name = field.name
             output_functions[field.name] = output
             output_maps[field.name] = dofmap[0]
-        _apply_initial_conditions(self.spec, W, field_indices, solution)
+        restart_values = _restart_history_values(self.initial_state, "mixed_state")
+        if restart_values is None:
+            _apply_initial_conditions(self.spec, W, field_indices, solution)
+        else:
+            _restore_array(solution.x.array, restart_values)
         previous.x.array[:] = solution.x.array
         previous.x.scatter_forward()
         _update_output_functions_from(solution, output_functions, output_maps)
@@ -399,8 +419,8 @@ class StepController:
                 writer.close()
 
 
-def execute_solve(spec: ProblemSpec, plan: RunPlan, mesh: MeshMetadata, run_dir: Path) -> SolverResult:
-    return StepController(spec, plan, mesh, run_dir).run()
+def execute_solve(spec: ProblemSpec, plan: RunPlan, mesh: MeshMetadata, run_dir: Path, initial_state: SolutionState | None = None) -> SolverResult:
+    return StepController(spec, plan, mesh, run_dir, initial_state).run()
 
 
 def initial_solution_state(spec: ProblemSpec, plan: RunPlan) -> SolutionState:
@@ -483,7 +503,7 @@ def _solve_linear_scalar(
     if reason <= 0:
         raise RuntimeError(f"PETSc KSP did not converge: {reason}")
     _assert_finite(uh)
-    field_state = {field_name: _field_summary(domain, uh)}
+    field_state = {field_name: _field_state(domain, uh)}
     artifacts: dict[str, Path] = {}
     if spec.output.format == "vtx" and trial.committed_step + 1 in plan.output_steps:
         output_path = run_dir / "fields" / "solution.bp"
@@ -491,7 +511,7 @@ def _solve_linear_scalar(
             writer.write(float(trial.time or 0.0))
         artifacts["solution_fields"] = output_path
     payload = {"reason": reason, "iterations": iterations, "residual_norm": norm, "elapsed_seconds": perf_counter() - started}
-    return StepSolve(field_state=field_state, artifacts=artifacts, payload=payload)
+    return StepSolve(field_state=field_state, history_state={}, artifacts=artifacts, payload=payload)
 
 
 def _solve_linear_elastic(
@@ -538,7 +558,7 @@ def _solve_linear_elastic(
     if reason <= 0:
         raise RuntimeError(f"PETSc KSP did not converge: {reason}")
     _assert_finite(uh)
-    field_state = {field_name: _field_summary(domain, uh)}
+    field_state = {field_name: _field_state(domain, uh)}
     artifacts: dict[str, Path] = {}
     if spec.output.format == "vtx" and trial.committed_step + 1 in plan.output_steps:
         output_path = run_dir / "fields" / f"{field_name}.bp"
@@ -546,7 +566,7 @@ def _solve_linear_elastic(
             writer.write(float(trial.time or 0.0))
         artifacts[f"solution_{field_name}"] = output_path
     payload = {"reason": reason, "iterations": iterations, "residual_norm": norm, "elapsed_seconds": perf_counter() - started}
-    return StepSolve(field_state=field_state, artifacts=artifacts, payload=payload)
+    return StepSolve(field_state=field_state, history_state={}, artifacts=artifacts, payload=payload)
 
 
 def _thermoelastic_residual(
@@ -900,7 +920,7 @@ def _assert_finite(function: Any) -> None:
         raise RuntimeError("solution contains nonfinite values")
 
 
-def _field_summary(domain: Any, function: Any) -> dict[str, Any]:
+def _field_state(domain: Any, function: Any) -> dict[str, Any]:
     array = np.asarray(np.real(function.x.array), dtype=float)
     local_min = float(np.min(array)) if array.size else float("inf")
     local_max = float(np.max(array)) if array.size else float("-inf")
@@ -910,7 +930,43 @@ def _field_summary(domain: Any, function: Any) -> dict[str, Any]:
         "max": float(domain.comm.allreduce(local_max, op=MPI.MAX)),
         "l2_norm": float(domain.comm.allreduce(local_l2, op=MPI.SUM) ** 0.5),
         "dofs_local": int(array.size),
+        "values": _array_values(array),
     }
+
+
+def _array_values(array: Any) -> tuple[float, ...]:
+    return tuple(float(value) for value in np.asarray(np.real(array), dtype=float))
+
+
+def _restore_array(target: Any, values: tuple[float, ...]) -> None:
+    if len(target) != len(values):
+        raise ValueError(f"restart vector has {len(values)} values, expected {len(target)}")
+    target[:] = np.asarray(values, dtype=PETSc.ScalarType)
+
+
+def _restart_field_values(state: SolutionState | None, field_name: str) -> tuple[float, ...] | None:
+    if state is None:
+        return None
+    payload = state.field_state.get(field_name)
+    if not isinstance(payload, dict):
+        return None
+    values = payload.get("values")
+    if values is None:
+        return None
+    return tuple(float(value) for value in values)
+
+
+def _restart_history_values(state: SolutionState | None, name: str) -> tuple[float, ...] | None:
+    if state is None:
+        return None
+    values = state.history_state.get(name)
+    if values is None:
+        return None
+    return tuple(float(value) for value in values)
+
+
+def _prepared_initial_state(state: SolutionState) -> SolutionState:
+    return _hashed_state(state.model_copy(update={"trial_step": None, "state_hash": ""}))
 
 
 def _sum_forms(forms: list[Any]) -> Any:
