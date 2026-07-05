@@ -1,99 +1,110 @@
 flowchart LR
     U([Config])
-    UNITS["Units + coordinate frame"]
-    TAGS["Tag registry\nphysical group schema"]
-    TIME["Time controller\nt0, t_end, dt, output_times"]
+    CFG["Config parser + schema validation\nunits, dimensions, time, required sections"]
+    UNITS["Units + coordinate frame\ncanonical scale"]
+    TAGS["Semantic tag registry\nname, dim, id, role"]
+    TIME["Time integrator backend\ncustom loop or PETSc TS/TSAdapt"]
+    CACHE["Artifact cache + provenance\nCAD, mesh, form, operator hashes"]
     CQ["CadQuery\nbuild CAD"]
-    GM["Gmsh\nphysical groups + meshing"]
+    GM["Gmsh\nphysical names + mesh fields"]
     VAL["Validate geometry, tags, mesh quality"]
-    IM["Import\nGmsh → DOLFINx"]
-    FS["Spaces & measures"]
-    MDB["MatDB\ntag → params"]
-    CF["Coeff-field builder"]
-    MAT["Material/state update\nresponse + tangent + internal vars"]
-    LOADS["Load/source spec"]
-    BCS["BC spec"]
-    BCB["BC builder"]
-    IC["IC init"]
-    STATE["State/history manager\nu_n, u_{n-1}, internal_vars, restart"]
-    PHYS["UFL model\nnonlinear transient templates"]
-    PRED["Predictor / initial guess\nfor u_{n+1}"]
-    STEP["Instantiate step residual/Jacobian"]
-    PROB["NonlinearProblem\nresidual + Jacobian callbacks"]
-    SNES["PETSc SNES solve"]
-    ADV["Advance state\ncommit/reject, update history"]
+    IM["Mesh adapter\nGmsh → DOLFINx MeshData"]
+    FS["Field/space registry\nscalar, vector, mixed blocks; measures"]
+    MDB["Material DB\ntag/name → normalized params"]
+    CF["Coefficient/constant builder\nstatic + time-dependent fields"]
+    MATLIB["Material law registry\nresponse + consistent tangent"]
+    LOADS["Load/source builder\ntime-aware functions"]
+    BCS["BC builder\ntime-aware Dirichlet + weak terms"]
+    IC["Initial/restart builder\nfields + internal variables"]
+    STATE["State/history manager\nu_n, history, internal vars, restart"]
+    PRED["Predictor / extrapolator\ninitial guess for u_{n+1}"]
+    PHYS["UFL nonlinear transient form factory\nresidual + Jacobian templates"]
+    STEP["Step residual/Jacobian instantiation\nscheme, t, dt, history"]
+    PROB["Nonlinear problem adapter\nF/J callbacks, BCs, nullspaces"]
+    SNES["PETSc SNES solve\nline search/trust region + monitors"]
+    ERR["Step convergence + physics checks\nresidual, error, invariants"]
+    ADV["Advance state\ncommit/reject, rollback, adapt dt"]
     POST["Postprocess\nderived fields, probes, integrals"]
+    IO["Output manager\ncheckpoint cadence vs visualization cadence"]
     OUT["Outputs\ncheckpoints, time series, diagnostics"]
 
-%% Global validation metadata
-    U -- units --> UNITS
-    U -- tag_schema --> TAGS
-    U -- time_spec --> TIME
-    UNITS -- scale/frame rules --> CQ
-    UNITS -- unit checks --> MDB
-    TAGS -- expected cell/facet groups --> GM
+%% Config and front-end
+    U --> CFG
+    CFG --> UNITS
+    CFG --> TAGS
+    CFG -- time spec + adaptivity policy --> TIME
+    CFG -- normalized hashable config --> CACHE
+    CFG -- geometry params --> CQ
+    CFG -- mesh params --> GM
+    CFG -- field/material/load/BC/physics/solver specs --> PHYS
 
 %% Geometry + mesh
-    U -- geom_params --> CQ
-    U -- mesh_params --> GM
-    CQ -- cad_model --> GM
-    GM -- "gmsh_mesh, cell_groups, facet_groups" --> VAL
-    TAGS -- required tags --> VAL
+    UNITS -- scale/frame rules --> CQ
+    CQ -- CAD model --> CACHE
+    CQ -- CAD model --> GM
+    TAGS -- required physical groups --> GM
+    GM -- gmsh mesh + physical names --> VAL
+    TAGS -- semantic schema --> VAL
     UNITS -- coordinate scale --> VAL
-    VAL -- "validated gmsh_mesh, groups" --> IM
-    IM -- "mesh, cell_tags, facet_tags" --> FS
-    U -- space_spec --> FS
+    VAL -- validated mesh + groups --> IM
+    IM -- mesh, cell/facet tags, physical_groups --> FS
+    IM -- mesh artifacts --> CACHE
+
+%% Fields, materials, loads, BCs, ICs
+    CFG -- space spec --> FS
     TAGS -- measure/tag names --> FS
-
-%% Materials / coefficients
-    U -- mat_map --> MDB
+    UNITS -- unit checks --> MDB
     TAGS -- cell tag validation --> MDB
-    MDB -- mat_spec --> CF
-    IM -- "mesh, cell_tags" --> CF
-    CF -- coeff_fields --> MAT
-
-%% Loads and boundary conditions
-    U -- load_map --> LOADS
-    U -- bc_map --> BCS
-    TAGS -- facet tag validation --> LOADS
-    TAGS -- facet tag validation --> BCS
-    BCS -- bc_spec --> BCB
-    IM -- "mesh, facet_tags" --> BCB
-    FS -- V --> BCB
-
-%% Initial state + physics templates
-    U -- ic_spec --> IC
-    FS -- V --> IC
-    IC -- "u_n, t0, initial internal_vars" --> STATE
-    U -- phys_spec --> PHYS
-    FS -- "V, u, du, v, dx, ds" --> PHYS
+    MDB -- normalized material specs --> CF
+    CFG -- material law choices --> MATLIB
+    CF -- coefficients/constants --> MATLIB
+    IM -- mesh + tags --> CF
+    CFG -- ic/restart spec --> IC
+    FS -- spaces + quadrature/state spaces --> IC
+    MATLIB -- initial internal variables --> IC
+    IC -- initial fields + internal vars --> STATE
+    CFG -- load specs --> LOADS
+    CFG -- BC specs --> BCS
+    TIME -- t, dt --> CF
+    TIME -- t, dt --> LOADS
+    TIME -- t, dt --> BCS
+    TAGS -- semantic lookup --> LOADS
+    TAGS -- semantic lookup --> BCS
+    IM -- mesh + tags --> LOADS
+    IM -- mesh + tags --> BCS
+    FS -- spaces + measures --> LOADS
+    FS -- spaces + measures --> BCS
 
 %% Time + nonlinear solve loop
-    TIME -- "t, dt, step_id" --> STATE
-    STATE -- "u_n, history, internal_vars" --> PRED
-    PRED -- "u_guess for u_{n+1}" --> SNES
-    TIME -- "t, dt" --> LOADS
-    TIME -- "t, dt" --> BCB
-    STATE -- "u_n, history, internal_vars" --> STEP
-    CF -- coeff_fields --> STEP
-    MAT -- "material response, tangent, trial state" --> STEP
-    LOADS -- "body_sources(t), tractions(t), fluxes(t), robin_terms(t)" --> STEP
-    BCB -- "natural_terms(t)" --> STEP
-    BCB -- "dirichlet_bcs(t)" --> PROB
-    PHYS -- form_templates --> STEP
-    STEP -- "F_step(u), J_step(u)" --> PROB
+    TIME -- t, dt, step_id --> STATE
+    STATE -- committed history/internal vars --> PRED
+    PRED -- u_guess for u_{n+1} --> SNES
+    FS -- u, du, v, block spaces, measures --> PHYS
+    MATLIB -- response + consistent tangent API --> PHYS
+    STATE -- history + trial internal vars --> STEP
+    CF -- coefficients/constants(t) --> STEP
+    LOADS -- body/natural terms(t) --> STEP
+    BCS -- weak terms(t) --> STEP
+    PHYS -- transient form templates --> STEP
+    STEP -- F_step(u), J_step(u) --> PROB
+    BCS -- Dirichlet BCs(t) --> PROB
+    FS -- nullspace hints --> PROB
     PROB -- assemble callbacks --> SNES
-    U -- solver_params --> SNES
-    SNES -- "u_trial / Newton iterate" --> MAT
-    SNES -- "u_{n+1}, solve_info" --> ADV
-    ADV -- "accepted state, committed internal_vars" --> STATE
-    ADV -- "step_status, suggested_dt" --> TIME
+    CFG -- PETSc SNES/KSP/PC options --> SNES
+    SNES -- trial iterate --> STATE
+    STATE -- trial vars --> MATLIB
+    SNES -- candidate u_{n+1} + solve_info --> ERR
+    ERR -- accepted/rejected + suggested_dt --> ADV
+    ADV -- commit accepted fields/internal vars --> STATE
+    ADV -- rollback rejected step --> STATE
+    ADV -- dt feedback --> TIME
 
 %% Results
-    STATE -- "state at output_times" --> POST
-    FS -- "V, measures" --> POST
-    POST -- "derived_fields, integrals" --> OUT
-    ADV -- "solve_info, failures, timing" --> OUT
-    STATE -- checkpoints --> OUT
-    U -- "config hash, provenance" --> OUT
-    IM -- "mesh, tags" --> OUT
+    STATE -- output-time states --> POST
+    FS -- spaces + measures --> POST
+    POST -- derived fields + integrals --> IO
+    STATE -- restart checkpoints --> IO
+    IO -- files + metadata --> OUT
+    ERR -- residuals/failures/timing/adaptivity --> OUT
+    CACHE -- provenance hashes --> OUT
+    IM -- mesh + tags --> OUT

@@ -1,74 +1,87 @@
 flowchart LR
     U([Config])
-    UNITS["Units + coordinate frame"]
-    TAGS["Tag registry\nphysical group schema"]
+    CFG["Config parser + schema validation\nunits, dimensions, required sections"]
+    UNITS["Units + coordinate frame\ncanonical scale"]
+    TAGS["Semantic tag registry\nname, dim, id, role"]
+    CACHE["Artifact cache + provenance\nCAD hash, mesh hash, form hash"]
     CQ["CadQuery\nbuild CAD"]
-    GM["Gmsh\nphysical groups + meshing"]
-    VAL["Validate geometry, tags, mesh quality"]
-    IM["Import\nGmsh → DOLFINx"]
-    FS["Spaces & measures"]
-    MDB["MatDB\ntag → params"]
-    CF["Coeff-field builder"]
-    LOADS["Load/source spec"]
-    BCS["BC spec"]
-    BCB["BC builder"]
-    PHYS["UFL model\nlinear steady"]
-    ASSY["Assemble + apply BCs"]
-    KSP["PETSc KSP solve"]
-    POST["Postprocess\nderived fields, probes, reactions"]
+    GM["Gmsh\nphysical names + mesh fields"]
+    VAL["Validate geometry, tags, mesh quality\ndim/id uniqueness, required groups"]
+    IM["Mesh adapter\nGmsh → DOLFINx MeshData"]
+    FS["Field/space registry\nscalar, vector, mixed blocks; measures"]
+    MDB["Material DB\ntag/name → normalized params"]
+    CF["Coefficient/constant builder\ncell-wise, facet-wise, time-independent"]
+    LOADS["Load/source builder\nsemantic facets/cells"]
+    BCS["BC builder\nDirichlet + weak BC terms"]
+    PHYS["UFL form factory\nlinear steady blocks"]
+    ASMPLAN["Assembly plan\nreuse constants/coefficients; block layout"]
+    ASSY["Assemble + lift/apply BCs"]
+    LINSYS["Linear system package\nA, b, nullspace, near-nullspace"]
+    KSP["PETSc KSP/PC solve\noptions prefix + monitors"]
+    QC["Solution verification\nresidual, conservation, reactions"]
+    POST["Postprocess\nderived fields, probes, integrals"]
+    IO["Output manager\ncheckpoint vs visualization"]
     OUT["Outputs\nsolution, mesh, metadata, diagnostics"]
 
-%% Global validation metadata
-    U -- units --> UNITS
-    U -- tag_schema --> TAGS
-    UNITS -- scale/frame rules --> CQ
-    UNITS -- unit checks --> MDB
-    TAGS -- expected cell/facet groups --> GM
+%% Config and semantics
+    U --> CFG
+    CFG -- canonical units --> UNITS
+    CFG -- semantic tags --> TAGS
+    CFG -- hashable normalized config --> CACHE
+    CFG -- geometry params --> CQ
+    CFG -- mesh params --> GM
+    CFG -- space/field spec --> FS
+    CFG -- material map --> MDB
+    CFG -- loads/BCs/physics/solver --> PHYS
 
 %% Geometry + mesh
-    U -- geom_params --> CQ
-    U -- mesh_params --> GM
-    CQ -- cad_model --> GM
-    GM -- "gmsh_mesh, cell_groups, facet_groups" --> VAL
-    TAGS -- required tags --> VAL
+    UNITS -- scale/frame rules --> CQ
+    CQ -- CAD model --> CACHE
+    CACHE -- cached CAD if valid --> GM
+    CQ -- CAD model --> GM
+    TAGS -- required physical groups --> GM
+    GM -- gmsh mesh + physical names --> VAL
+    TAGS -- semantic schema --> VAL
     UNITS -- coordinate scale --> VAL
-    VAL -- "validated gmsh_mesh, groups" --> IM
-    IM -- "mesh, cell_tags, facet_tags" --> FS
+    VAL -- validated mesh + groups --> IM
+    IM -- mesh, cell/facet tags, physical_groups --> FS
+    IM -- mesh artifacts --> CACHE
 
-%% Spaces + measures
-    U -- space_spec --> FS
+%% Fields, materials, loads, BCs
     TAGS -- measure/tag names --> FS
-
-%% Materials / coefficients
-    U -- mat_map --> MDB
+    UNITS -- unit checks --> MDB
     TAGS -- cell tag validation --> MDB
-    MDB -- mat_spec --> CF
-    IM -- "mesh, cell_tags" --> CF
-    CF -- coeff_fields --> PHYS
+    MDB -- normalized material specs --> CF
+    IM -- mesh + cell/facet tags --> CF
+    CFG -- load specs --> LOADS
+    CFG -- BC specs --> BCS
+    TAGS -- semantic cell/facet lookup --> LOADS
+    TAGS -- semantic facet lookup --> BCS
+    IM -- mesh + tags --> LOADS
+    IM -- mesh + tags --> BCS
+    FS -- spaces + measures --> LOADS
+    FS -- spaces + measures --> BCS
 
-%% Loads and boundary conditions
-    U -- load_map --> LOADS
-    U -- bc_map --> BCS
-    TAGS -- facet tag validation --> LOADS
-    TAGS -- facet tag validation --> BCS
-    LOADS -- "body_sources, tractions, fluxes, robin_terms" --> PHYS
-    BCS -- bc_spec --> BCB
-    IM -- "mesh, facet_tags" --> BCB
-    FS -- V --> BCB
-    BCB -- natural_terms --> PHYS
-
-%% Physics + forms
-    U -- phys_spec --> PHYS
-    FS -- "V, u, v, dx, ds" --> PHYS
-    PHYS -- "a(u,v), L(v)" --> ASSY
-    BCB -- dirichlet_bcs --> ASSY
-    ASSY -- "A_bc, b_bc" --> KSP
-    U -- solver_params --> KSP
+%% Problem construction and solve
+    FS -- trial/test/block spaces + dx/ds --> PHYS
+    CF -- coefficients/constants --> PHYS
+    LOADS -- body/natural terms --> PHYS
+    BCS -- weak terms --> PHYS
+    PHYS -- a(u,v), L(v) --> ASMPLAN
+    ASMPLAN -- reusable assembly recipe --> ASSY
+    BCS -- Dirichlet BCs --> ASSY
+    ASSY -- A, b --> LINSYS
+    FS -- nullspace hints --> LINSYS
+    LINSYS -- configured system --> KSP
+    CFG -- PETSc options --> KSP
 
 %% Results
-    KSP -- "u_sol, solve_info" --> POST
-    FS -- "V, measures" --> POST
-    POST -- "derived_fields, integrals, reactions" --> OUT
-    KSP -- diagnostics --> OUT
-    U -- "config hash, provenance" --> OUT
-    IM -- "mesh, tags" --> OUT
+    KSP -- solution + solve_info --> QC
+    LINSYS -- A, b --> QC
+    QC -- accepted solution + diagnostics --> POST
+    FS -- spaces + measures --> POST
+    POST -- derived fields + integrals --> IO
+    IO -- checkpoints + visualization files --> OUT
+    CACHE -- provenance hashes --> OUT
+    IM -- mesh + tags --> OUT
+    QC -- residuals/reactions/conservation --> OUT

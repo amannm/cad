@@ -1,80 +1,94 @@
 flowchart LR
     U([Config])
-    UNITS["Units + coordinate frame"]
-    TAGS["Tag registry\nphysical group schema"]
+    CFG["Config parser + schema validation\nunits, dimensions, required sections"]
+    UNITS["Units + coordinate frame\ncanonical scale"]
+    TAGS["Semantic tag registry\nname, dim, id, role"]
+    CACHE["Artifact cache + provenance\nCAD, mesh, form, tangent hashes"]
     CQ["CadQuery\nbuild CAD"]
-    GM["Gmsh\nphysical groups + meshing"]
+    GM["Gmsh\nphysical names + mesh fields"]
     VAL["Validate geometry, tags, mesh quality"]
-    IM["Import\nGmsh → DOLFINx"]
-    FS["Spaces & measures"]
-    MDB["MatDB\ntag → params"]
-    CF["Coeff-field builder"]
-    MAT["Material/state update\nresponse + tangent"]
-    LOADS["Load/source spec"]
-    BCS["BC spec"]
-    BCB["BC builder"]
-    PHYS["UFL model\nnonlinear steady"]
-    GUESS["Initial guess / continuation"]
-    PROB["NonlinearProblem\nresidual + Jacobian callbacks"]
-    SNES["PETSc SNES solve"]
+    IM["Mesh adapter\nGmsh → DOLFINx MeshData"]
+    FS["Field/space registry\nscalar, vector, mixed blocks; measures"]
+    MDB["Material DB\ntag/name → normalized params"]
+    CF["Coefficient/constant builder\ncell-wise, facet-wise"]
+    MATLIB["Material law registry\nenergy/residual/tangent; quadrature state"]
+    STATE["State manager\ninternal vars, trial vars, commit/rollback"]
+    LOADS["Load/source builder\nsemantic facets/cells"]
+    BCS["BC builder\nDirichlet + weak BC terms"]
+    PHYS["UFL nonlinear form factory\nresidual + Jacobian"]
+    CONT["Continuation/load stepping\ninitial guess, bounds, homotopy"]
+    PROB["Nonlinear problem adapter\nF/J callbacks, BCs, nullspaces"]
+    SNES["PETSc SNES solve\nline search/trust region + monitors"]
+    CONV["Convergence gate\nresidual, update norm, physics checks"]
     POST["Postprocess\nderived fields, probes, reactions"]
+    IO["Output manager\nsolution, state, visualization"]
     OUT["Outputs\nsolution, metadata, diagnostics"]
 
-%% Global validation metadata
-    U -- units --> UNITS
-    U -- tag_schema --> TAGS
-    UNITS -- scale/frame rules --> CQ
-    UNITS -- unit checks --> MDB
-    TAGS -- expected cell/facet groups --> GM
+%% Config and semantics
+    U --> CFG
+    CFG --> UNITS
+    CFG --> TAGS
+    CFG --> CACHE
+    CFG -- geometry params --> CQ
+    CFG -- mesh params --> GM
+    CFG -- field/material/load/BC/physics/solver specs --> PHYS
 
 %% Geometry + mesh
-    U -- geom_params --> CQ
-    U -- mesh_params --> GM
-    CQ -- cad_model --> GM
-    GM -- "gmsh_mesh, cell_groups, facet_groups" --> VAL
-    TAGS -- required tags --> VAL
+    UNITS -- scale/frame rules --> CQ
+    CQ -- CAD model --> CACHE
+    CQ -- CAD model --> GM
+    TAGS -- required physical groups --> GM
+    GM -- gmsh mesh + physical names --> VAL
+    TAGS -- semantic schema --> VAL
     UNITS -- coordinate scale --> VAL
-    VAL -- "validated gmsh_mesh, groups" --> IM
-    IM -- "mesh, cell_tags, facet_tags" --> FS
+    VAL -- validated mesh + groups --> IM
+    IM -- mesh, cell/facet tags, physical_groups --> FS
+    IM -- mesh artifacts --> CACHE
 
-%% Spaces + measures
-    U -- space_spec --> FS
+%% Fields, materials, loads, BCs
+    CFG -- space spec --> FS
     TAGS -- measure/tag names --> FS
-
-%% Materials / coefficients
-    U -- mat_map --> MDB
+    UNITS -- unit checks --> MDB
     TAGS -- cell tag validation --> MDB
-    MDB -- mat_spec --> CF
-    IM -- "mesh, cell_tags" --> CF
-    CF -- coeff_fields --> MAT
+    MDB -- normalized material specs --> CF
+    CF -- coefficients/constants --> MATLIB
+    CFG -- material law choices --> MATLIB
+    IM -- mesh + tags --> CF
+    FS -- quadrature/function spaces --> STATE
+    MATLIB -- initial internal vars --> STATE
+    CFG -- load specs --> LOADS
+    CFG -- BC specs --> BCS
+    TAGS -- semantic lookup --> LOADS
+    TAGS -- semantic lookup --> BCS
+    IM -- mesh + tags --> LOADS
+    IM -- mesh + tags --> BCS
+    FS -- spaces + measures --> LOADS
+    FS -- spaces + measures --> BCS
 
-%% Loads and boundary conditions
-    U -- load_map --> LOADS
-    U -- bc_map --> BCS
-    TAGS -- facet tag validation --> LOADS
-    TAGS -- facet tag validation --> BCS
-    LOADS -- "body_sources, tractions, fluxes, robin_terms" --> PHYS
-    BCS -- bc_spec --> BCB
-    IM -- "mesh, facet_tags" --> BCB
-    FS -- V --> BCB
-    BCB -- natural_terms --> PHYS
-
-%% Physics + nonlinear problem
-    U -- phys_spec --> PHYS
-    FS -- "V, u, du, v, dx, ds" --> PHYS
-    MAT -- "material response, tangent, state_vars" --> PHYS
-    PHYS -- "F(u;v), J(u;du,v)" --> PROB
-    BCB -- dirichlet_bcs --> PROB
+%% Nonlinear solve
+    CFG -- continuation params + u0 --> CONT
+    CONT -- current load factor + initial guess --> SNES
+    FS -- u, du, v, block spaces, measures --> PHYS
+    MATLIB -- response + consistent tangent API --> PHYS
+    STATE -- committed/trial internal vars --> PHYS
+    LOADS -- body/natural terms --> PHYS
+    BCS -- weak terms + Dirichlet BCs --> PHYS
+    PHYS -- F(u;v), J(u;du,v) --> PROB
+    BCS -- Dirichlet BCs --> PROB
+    FS -- nullspace hints --> PROB
     PROB -- assemble callbacks --> SNES
-    U -- "initial_guess, continuation_params" --> GUESS
-    GUESS -- u0 --> SNES
-    U -- solver_params --> SNES
-    SNES -- "u_trial / Newton iterate" --> MAT
-    SNES -- "u_sol, solve_info" --> POST
+    CFG -- PETSc SNES/KSP/PC options --> SNES
+    SNES -- trial iterate --> STATE
+    STATE -- trial vars --> MATLIB
+    SNES -- candidate solution + solve_info --> CONV
+    CONV -- accepted solution --> STATE
+    CONV -- failed step / smaller load increment --> CONT
+    STATE -- commit accepted internal vars --> POST
 
 %% Results
-    FS -- "V, measures" --> POST
-    POST -- "derived_fields, integrals, reactions" --> OUT
-    SNES -- "residuals, iterations, convergence" --> OUT
-    U -- "config hash, provenance" --> OUT
-    IM -- "mesh, tags" --> OUT
+    FS -- spaces + measures --> POST
+    POST -- derived fields, integrals, reactions --> IO
+    IO -- files + metadata --> OUT
+    CONV -- residuals/iterations/convergence reason --> OUT
+    CACHE -- provenance hashes --> OUT
+    IM -- mesh + tags --> OUT
